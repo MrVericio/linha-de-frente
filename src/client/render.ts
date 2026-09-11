@@ -1,5 +1,11 @@
 import { T, B, NUKE_RANGE, NUKE_R_CORE, NUKE_R_OUTER } from '../shared/constants.js';
-import type { World } from './state.js';
+import type { Region, World } from './state.js';
+
+export interface ExpandMarker {
+  tile: number;
+  hue: number;
+  me: boolean;
+}
 
 export interface Camera {
   x: number; // centro da camera em coordenadas de mundo (pixels)
@@ -25,6 +31,8 @@ export interface Scene {
   explosions: Explosion[];
   now: number;
   validBuild: boolean;
+  regions: Region[];
+  expandTargets: ExpandMarker[];
 }
 
 const colorCache = new Map<string, string>();
@@ -208,31 +216,67 @@ export class Renderer {
       }
     }
 
-    // ------- numeros de tropas -------
-    // politica: zoom medio mostra apenas SEUS tiles; zoom alto mostra tudo
-    if (s.showNumbers && z >= 12) {
+    // ------- numeros de tropas: UM por regiao, centralizado -------
+    if (s.showNumbers) {
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      const fs = Math.max(8, Math.min(22, z * 0.42));
-      ctx.font = `700 ${fs}px system-ui, -apple-system, Segoe UI, Roboto, sans-serif`;
-      ctx.lineWidth = Math.max(2, fs * 0.28);
-      ctx.strokeStyle = 'rgba(0,0,0,0.65)';
-      ctx.fillStyle = '#fff';
-      const showAll = z >= 24;
-      for (let y = y0; y <= y1; y++) {
-        for (let x = x0; x <= x1; x++) {
-          const i = y * w.w + x;
-          if (w.terrain[i] === T.WATER) continue;
-          const t = w.troops[i];
-          if (t <= 0) continue;
-          if (!showAll && w.owner[i] !== w.you && i !== s.hover && i !== s.selected) continue;
-          const label = t >= 10000 ? `${(t / 1000).toFixed(0)}k` : t >= 1000 ? `${(t / 1000).toFixed(1)}k` : String(t);
-          const cx = ox + (x + 0.5) * z;
-          const cy = oy + (y + 0.5) * z;
-          ctx.strokeText(label, cx, cy);
-          ctx.fillText(label, cx, cy);
-        }
+      for (const r of s.regions) {
+        if (r.tiles <= 0 || r.troops < 1) continue;
+        const lx = ox + ((r.label % w.w) + 0.5) * z;
+        const ly = oy + (Math.floor(r.label / w.w) + 0.5) * z;
+        if (lx < -60 || ly < -60 || lx > this.vw + 60 || ly > this.vh + 60) continue;
+        const fs = Math.max(12, Math.min(76, Math.sqrt(r.tiles) * z * 0.36));
+        ctx.font = `800 ${fs}px system-ui, -apple-system, Segoe UI, Roboto, sans-serif`;
+        ctx.lineWidth = Math.max(2.5, fs * 0.22);
+        ctx.strokeStyle = 'rgba(0,0,0,0.72)';
+        ctx.fillStyle = r.owner === w.you ? '#ffffff' : 'rgba(255,255,255,0.94)';
+        const label = fmtTroops(r.troops);
+        ctx.strokeText(label, lx, ly);
+        ctx.fillText(label, lx, ly);
       }
+      // numero auxiliar do tile sob o cursor / selecionado
+      const aux = [s.hover, s.selected];
+      ctx.font = `700 ${Math.max(9, Math.min(15, z * 0.4))}px system-ui, sans-serif`;
+      ctx.lineWidth = 2.5;
+      ctx.strokeStyle = 'rgba(0,0,0,0.7)';
+      ctx.fillStyle = 'rgba(255,255,255,0.85)';
+      for (const i of aux) {
+        if (i < 0 || i >= w.n || w.terrain[i] === T.WATER || w.troops[i] < 1) continue;
+        const lx = ox + ((i % w.w) + 0.5) * z;
+        const ly = oy + (Math.floor(i / w.w) + 0.12) * z;
+        ctx.strokeText(String(w.troops[i]), lx, ly);
+        ctx.fillText(String(w.troops[i]), lx, ly);
+      }
+    }
+
+    // ------- marcadores de ordem de expansao -------
+    for (const et of s.expandTargets) {
+      if (et.tile < 0 || et.tile >= w.n) continue;
+      const ex = ox + ((et.tile % w.w) + 0.5) * z;
+      const ey = oy + (Math.floor(et.tile / w.w) + 0.5) * z;
+      if (ex < -80 || ey < -80 || ex > this.vw + 80 || ey > this.vh + 80) continue;
+      const pulse = (s.now % 900) / 900;
+      const col = `hsl(${et.hue} 85% 62%)`;
+      ctx.save();
+      ctx.strokeStyle = col;
+      ctx.lineWidth = Math.max(1.5, z * 0.1);
+      ctx.globalAlpha = 0.95 - pulse * 0.55;
+      ctx.beginPath();
+      ctx.arc(ex, ey, z * (0.55 + pulse * 0.75), 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+      // bandeirinha
+      const fs = Math.max(8, z * 0.5);
+      ctx.beginPath();
+      ctx.moveTo(ex, ey - fs * 1.1);
+      ctx.lineTo(ex, ey + fs * 0.5);
+      ctx.moveTo(ex, ey - fs * 1.1);
+      ctx.lineTo(ex + fs * 0.85, ey - fs * 0.75);
+      ctx.lineTo(ex, ey - fs * 0.4);
+      ctx.strokeStyle = et.me ? '#ffffff' : col;
+      ctx.lineWidth = Math.max(1.5, z * 0.09);
+      ctx.stroke();
+      ctx.restore();
     }
 
     // ------- modo missil -------
@@ -466,3 +510,10 @@ const layerColorCache = {
   neutralLand: [112, 120, 96],
   neutralMountain: [96, 92, 84]
 };
+
+function fmtTroops(t: number): string {
+  if (t >= 1e6) return `${(t / 1e6).toFixed(1)}M`;
+  if (t >= 1e4) return `${(t / 1e3).toFixed(1)}k`;
+  if (t >= 1000) return `${(t / 1e3).toFixed(2)}k`;
+  return String(Math.round(t));
+}

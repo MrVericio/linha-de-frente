@@ -30,6 +30,15 @@ const configs = [
     logLevel: 'warning'
   },
   {
+    entryPoints: ['src/sim/expandtest.ts'],
+    outfile: 'dist/expandtest.cjs',
+    bundle: true,
+    platform: 'node',
+    format: 'cjs',
+    target: 'node20',
+    logLevel: 'warning'
+  },
+  {
     entryPoints: ['src/sim/simtest.ts'],
     outfile: 'dist/simtest.cjs',
     bundle: true,

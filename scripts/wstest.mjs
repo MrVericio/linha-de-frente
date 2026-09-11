@@ -109,11 +109,18 @@ try {
   // mantem o espelho atualizado a cada tick
   const origOnMsg = A.ws.listeners('message').slice();
   A.ws.removeAllListeners('message');
+  let illegalExpand = 0; // tile de outro jogador tomado por mim (nao deve acontecer em expansao)
   A.ws.on('message', (raw) => {
     for (const fn of origOnMsg) fn(raw);
     try {
       const m = JSON.parse(String(raw));
-      if (m.t === 'tick') { mirror.apply(m.changes); mirror.players = m.players; }
+      if (m.t === 'tick') {
+        for (const [i, o] of m.changes || []) {
+          if (o === 0 && mirror.owner[i] > 0) illegalExpand++;
+        }
+        mirror.apply(m.changes);
+        mirror.players = m.players;
+      }
     } catch { /* ignore */ }
   });
 
@@ -197,6 +204,29 @@ try {
   await wait(1500);
   const avg = sizes.length ? Math.round(sizes.reduce((a, b) => a + b, 0) / sizes.length) : 0;
   log(`   payload medio por broadcast: ${(avg / 1024).toFixed(1)} KB (${sizes.length} pacotes)`);
+
+  // ---- ordem de expansao: clique/compando em neutro distante ----
+  const tilesBeforeExp = mirror.players.find((p) => p.id === 0).tiles;
+  let far = -1;
+  outer: for (let i = 0; i < mirror.owner.length; i++) {
+    if (mirror.owner[i] !== -1 || mirror.terrain[i] === 0) continue;
+    const x = i % mirror.w;
+    const y = Math.floor(i / mirror.w);
+    for (const m of [...mirror.owner.keys()].filter((k) => mirror.owner[k] === 0)) {
+      const d = Math.abs((m % mirror.w) - x) + Math.abs(Math.floor(m / mirror.w) - y);
+      if (d < 12) continue outer;
+    }
+    far = i;
+    break;
+  }
+  A.send({ t: 'cmd', c: 'expand', tile: far });
+  await wait(7000);
+  const tilesAfterExp = mirror.players.find((p) => p.id === 0).tiles;
+  check('ordem de expansao conquista neutro distante, sem atacar inimigos',
+    far >= 0 && tilesAfterExp > tilesBeforeExp && illegalExpand === 0,
+    `tiles ${tilesBeforeExp} -> ${tilesAfterExp}, tomados de inimigos=${illegalExpand}`);
+  A.send({ t: 'cmd', c: 'expand', tile: -1 });
+  await wait(300);
 
   // bots estao vivos e expandindo
   const botsMoving = mirror.players.filter((p) => p.bot && p.tiles > 0).length;

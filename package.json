@@ -10,7 +10,8 @@
     "start": "node dist/server.cjs",
     "dev": "node build.mjs && node dist/server.cjs",
     "typecheck": "tsc --noEmit",
-    "simtest": "node build.mjs && node dist/simtest.cjs"
+    "simtest": "node build.mjs && node dist/simtest.cjs",
+    "test": "npm run typecheck && npm run simtest -- 600 8 12345 && node scripts/wstest.mjs && node scripts/browser-test.mjs"
   },
   "dependencies": {
     "ws": "^8.18.0"

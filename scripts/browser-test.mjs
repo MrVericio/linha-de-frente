@@ -110,30 +110,54 @@ try {
   await page.keyboard.press('c');
   await wait(400);
 
-  // ataque dirigido via hook de depuracao
+  // ---- NOVO MODELO: clique em tile vazio = ordem de expansao ----
   const tilesBefore = await page.$eval('#sTiles', (e) => e.textContent);
-  // forca maxima de ataque para o teste
+  const farTile = await page.evaluate(() => window.__ldf.farNeutral(10));
+  check('existe tile vazio distante para mirar', farTile >= 0);
+  // centraliza a camera no alvo para o clique cair longe dos paineis de HUD
+  await page.evaluate((i) => window.__ldf.centerOnTile(i, 14), farTile);
+  await wait(300);
+  const fpos = await page.evaluate((i) => window.__ldf.tileToScreen(i), farTile);
+  await page.mouse.click(box.x + fpos.x, box.y + fpos.y);
+  await wait(500);
+  const tgt = await page.evaluate(
+    () => window.__ldf.world.players.find((p) => p.id === window.__ldf.world.you)?.expandTarget
+  );
+  check('clique no vazio vira ordem de expansao (marcador no alvo)', tgt === farTile, `alvo=${tgt}`);
+  await wait(9000);
+  const tilesAfter = await page.$eval('#sTiles', (e) => e.textContent);
+  check('tropas fluem e se espalham sozinhas ate o alvo',
+    parseFloat(tilesAfter) > parseFloat(tilesBefore),
+    `territorio ${tilesBefore} -> ${tilesAfter}`);
+
+  // numeros centralizados por regiao
+  const regs = await page.evaluate(() => window.__ldf.regionInfo());
+  const mineRegs = regs.filter((r) => r.owner === 0);
+  check('numeros centralizados por regiao (nao tile a tile)',
+    regs.length >= 8 && mineRegs.length >= 1 && mineRegs.every((r) => r.label >= 0 && r.tiles >= 1),
+    `${regs.length} regioes | minha: ${mineRegs.map((r) => r.tiles + ' tiles/' + r.troops + ' tropas').join(', ')}`);
+  await page.keyboard.press('q');
+  await wait(400);
+  await shot('09-expansao.png');
+
+  // clique na fronteira (tile neutro vizinho ao meu territorio) conquista na hora
   await page.$eval('#ratioRange', (e) => {
     e.value = '100';
     e.dispatchEvent(new Event('input', { bubbles: true }));
   });
+  const pair = await page.evaluate(() => window.__ldf.bestAttackPair());
   let conquered = false;
-  for (let attempt = 0; attempt < 8 && !conquered; attempt++) {
-    const pair = await page.evaluate(() => window.__ldf.bestAttackPair());
-    if (!pair) break;
-    const a = await page.evaluate((i) => window.__ldf.tileToScreen(i), pair.from);
-    const bpos = await page.evaluate((i) => window.__ldf.tileToScreen(i), pair.to);
-    await page.mouse.click(box.x + a.x, box.y + a.y);
-    await wait(150);
-    const sel = await page.evaluate(() => window.__ldf.selected);
-    await page.mouse.click(box.x + bpos.x, box.y + bpos.y);
-    await wait(600);
-    const own = await page.evaluate((i) => window.__ldf.world.owner[i], pair.to);
-    if (own === 0 && sel >= 0) conquered = true;
+  if (pair) {
+    for (let tentativa = 0; tentativa < 2 && !conquered; tentativa++) {
+      await page.evaluate((i) => window.__ldf.centerOnTile(i, 16), pair.to);
+      await wait(250);
+      const bpos = await page.evaluate((i) => window.__ldf.tileToScreen(i), pair.to);
+      await page.mouse.click(box.x + bpos.x, box.y + bpos.y);
+      await wait(4000); // expansao pode precisar puxar tropas antes de conquistar
+      conquered = (await page.evaluate((i) => window.__ldf.world.owner[i], pair.to)) === 0;
+    }
   }
-  const tilesAfter = await page.$eval('#sTiles', (e) => e.textContent);
-  check('clique-seleciona + clique-ataca conquista tile neutro', conquered,
-    `territorio ${tilesBefore} -> ${tilesAfter}`);
+  check('clique na fronteira conquista o tile vizinho', !!pair && conquered);
 
   await shot('04-apos-interacao.png');
 

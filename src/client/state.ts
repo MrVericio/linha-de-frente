@@ -1,6 +1,15 @@
 import { b64ToBytes } from '../shared/codec.js';
 import { T, type Change, type PlayerSnapshot } from '../shared/constants.js';
 
+/** Um blob conectado de tiles do mesmo dono, com o total de tropas. */
+export interface Region {
+  owner: number;
+  tiles: number;
+  troops: number;
+  /** tile onde o numero e desenhado (o mais proximo do centroide) */
+  label: number;
+}
+
 /**
  * Estado do mundo no cliente (espelho do servidor).
  */
@@ -183,6 +192,72 @@ export class World {
       }
     }
     return false;
+  }
+
+  private regComp: Int32Array = new Int32Array(0);
+  private regMembers: Int32Array = new Int32Array(0);
+
+  /**
+   * Regioes conectadas (4-vizinhos) por dono. O numero de tropas e mostrado
+   * uma unica vez, centralizado no blob — nao tile a tile.
+   */
+  computeRegions(): Region[] {
+    if (!this.n) return [];
+    if (this.regComp.length !== this.n) {
+      this.regComp = new Int32Array(this.n);
+      this.regMembers = new Int32Array(this.n);
+    }
+    const comp = this.regComp;
+    const members = this.regMembers;
+    comp.fill(-1);
+    const out: Region[] = [];
+    const stack: number[] = [];
+    for (let start = 0; start < this.n; start++) {
+      const o = this.owner[start];
+      if (comp[start] !== -1 || o < 0 || this.terrain[start] === T.WATER) continue;
+      const id = out.length;
+      let tiles = 0;
+      let troops = 0;
+      let sx = 0;
+      let sy = 0;
+      stack.length = 0;
+      stack.push(start);
+      comp[start] = id;
+      while (stack.length) {
+        const i = stack.pop() as number;
+        members[tiles++] = i;
+        troops += this.troops[i];
+        sx += i % this.w;
+        sy += (i / this.w) | 0;
+        const x = i % this.w;
+        const y = (i / this.w) | 0;
+        for (let k = 0; k < 4; k++) {
+          const nx = x + (k === 0 ? 1 : k === 1 ? -1 : 0);
+          const ny = y + (k === 2 ? 1 : k === 3 ? -1 : 0);
+          if (nx < 0 || ny < 0 || nx >= this.w || ny >= this.h) continue;
+          const nb = ny * this.w + nx;
+          if (comp[nb] !== -1 || this.owner[nb] !== o) continue;
+          comp[nb] = id;
+          stack.push(nb);
+        }
+      }
+      const cx = sx / tiles;
+      const cy = sy / tiles;
+      let label = members[0];
+      let bestD = Infinity;
+      for (let k = 0; k < tiles; k++) {
+        const i = members[k];
+        const dx = (i % this.w) - cx;
+        const dy = ((i / this.w) | 0) - cy;
+        const d = dx * dx + dy * dy;
+        if (d < bestD) {
+          bestD = d;
+          label = i;
+        }
+      }
+      out.push({ owner: o, tiles, troops, label });
+    }
+    return out;
   }
 
   mySiloTiles(pid: number): number[] {

@@ -12,6 +12,7 @@ export type C2S =
   | { t: 'cmd'; c: 'attack'; path: number[]; ratio: number }
   | { t: 'cmd'; c: 'build'; tile: number; type: number }
   | { t: 'cmd'; c: 'nuke'; from: number; to: number }
+  | { t: 'cmd'; c: 'expand'; tile: number }
   | { t: 'chat'; text: string }
   | { t: 'leave' }
   | { t: 'ping' };

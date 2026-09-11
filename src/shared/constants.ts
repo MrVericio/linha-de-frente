@@ -49,6 +49,15 @@ export const FLAT_GROWTH = 1.1; // crescimento linear por segundo (recupera tile
 export const MIN_ATTACK_TROOPS = 2;
 export const TRANSFER_RESERVE = 4; // tropas que ficam no tile ao transferir
 
+// ---------------- Expansao automatica ----------------
+// Clique num tile vazio = ordem de expansao: as tropas fluem e se espalham
+// pelo territorio neutro em direcao ao alvo, parando ao encostar em outro
+// jogador (sem atacar). Clique em tile inimigo na fronteira = ataque.
+export const EXPAND_STEP_INTERVAL = 0.22; // segundos entre passos de expansao
+export const EXPAND_MAX_CLAIMS_PER_STEP = 2; // tiles neutros conquistados por passo
+export const EXPAND_RATIO = 0.9; // fracao das tropas usadas ao conquistar
+export const EXPAND_RESERVE = 6; // tropas minimas que ficam no tile de origem
+
 export const DEF_OUTPOST = 1.4; // multiplicador defensivo
 export const DEF_MOUNTAIN = 1.3;
 export const DEF_CITY = 1.25;
@@ -116,6 +125,8 @@ export interface PlayerSnapshot {
   outposts: number;
   silos: number;
   nukeCd: number;
+  /** alvo da ordem de expansao automatica (-1 = nenhuma) */
+  expandTarget: number;
   /** true para quem esta assistindo (entrou com a partida em andamento) */
   spectator?: boolean;
   /** slot liberado (jogador saiu do lobby) — id nunca e reutilizado durante a partida */

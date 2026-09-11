@@ -3,6 +3,7 @@ import {
   TILE_MAX_TROOPS, MOUNTAIN_MAX_TROOPS, CITY_MAX_TROOPS, OUTPOST_MAX_TROOPS,
   PORT_MAX_TROOPS, SILO_MAX_TROOPS,
   GROWTH_RATE, FLAT_GROWTH, MIN_ATTACK_TROOPS, TRANSFER_RESERVE,
+  EXPAND_STEP_INTERVAL, EXPAND_MAX_CLAIMS_PER_STEP, EXPAND_RATIO, EXPAND_RESERVE,
   DEF_OUTPOST, DEF_MOUNTAIN, DEF_CITY,
   GOLD_START, GOLD_PORT_PER_SEC, GOLD_CITY_PER_SEC, GOLD_TILE_PER_SEC, GOLD_BASE_PER_SEC, COSTS,
   NUKE_COST, NUKE_COOLDOWN, NUKE_RANGE, NUKE_R_CORE, NUKE_R_OUTER,
@@ -54,7 +55,10 @@ export class Game {
   private events: GameEvent[] = [];
   private rnd: () => number = Math.random;
   private botTimers: number[] = [];
+  private expandTimers: number[] = [];
   private sdAnnounced = false;
+  private distScratch: Int32Array = new Int32Array(0);
+  private queueScratch: Int32Array = new Int32Array(0);
   n = 0;
 
   constructor(opts: { seed?: number; totalPlayers?: number; difficulty?: number } = {}) {
@@ -88,6 +92,7 @@ export class Game {
       outposts: 0,
       silos: 0,
       nukeCd: 0,
+      expandTarget: -1,
       removed: false
     };
     if (free >= 0) this.players[id] = p;
@@ -167,6 +172,7 @@ export class Game {
       p.troops = 0;
       p.buildings = 0;
       p.nukeCd = 0;
+      p.expandTarget = -1;
     });
 
     const spawns = map.spawns;
@@ -385,6 +391,16 @@ export class Game {
       p.gold += income * dt;
     }
 
+    // expansao automatica dos jogadores
+    for (const p of players) {
+      if (!p.alive || p.removed || p.spectator || p.expandTarget < 0) continue;
+      this.expandTimers[p.id] = (this.expandTimers[p.id] ?? 0) - dt;
+      if (this.expandTimers[p.id] <= 0) {
+        this.expandTimers[p.id] = EXPAND_STEP_INTERVAL;
+        this.expandStep(p);
+      }
+    }
+
     // IA dos bots
     for (const p of players) {
       if (!p.bot || !p.alive || p.removed) continue;
@@ -484,6 +500,121 @@ export class Game {
       if (this.troops[to] < 0.4) this.troops[to] = 0;
     }
     return true;
+  }
+
+  /**
+   * Ordem de expansao automatica: as tropas do jogador fluem e conquistam
+   * territorio NEUTRO em direcao a `tile`, parando ao encostar em outro
+   * jogador (nunca ataca sozinho). `tile = -1` cancela.
+   */
+  setExpand(pid: number, tile: number): boolean {
+    if (this.state !== 'playing') return false;
+    const p = this.players[pid];
+    if (!p || !p.alive || p.spectator || p.removed) return false;
+    if (tile === -1) {
+      p.expandTarget = -1;
+      return true;
+    }
+    if (!this.valid(tile) || this.terrain[tile] === T.WATER) return false;
+    p.expandTarget = tile;
+    return true;
+  }
+
+  /** Um passo da expansao automatica de um jogador. */
+  private expandStep(p: PlayerSnapshot): void {
+    const t = p.expandTarget;
+    if (t < 0 || !this.valid(t)) {
+      p.expandTarget = -1;
+      return;
+    }
+    if (p.tiles <= 0) {
+      p.expandTarget = -1;
+      return;
+    }
+    if (this.owner[t] === p.id) {
+      p.expandTarget = -1; // chegou ao destino
+      return;
+    }
+
+    // campo de distancia (BFS a partir do alvo, so por terra)
+    if (this.distScratch.length !== this.n) {
+      this.distScratch = new Int32Array(this.n);
+      this.queueScratch = new Int32Array(this.n);
+    }
+    const dist = this.distScratch;
+    dist.fill(-1);
+    const q = this.queueScratch;
+    let head = 0;
+    let tail = 0;
+    dist[t] = 0;
+    q[tail++] = t;
+    while (head < tail) {
+      const cur = q[head++];
+      const d = dist[cur] + 1;
+      const x = cur % this.w;
+      const y = (cur / this.w) | 0;
+      for (let k = 0; k < 4; k++) {
+        const nx = x + (k === 0 ? 1 : k === 1 ? -1 : 0);
+        const ny = y + (k === 2 ? 1 : k === 3 ? -1 : 0);
+        if (nx < 0 || ny < 0 || nx >= this.w || ny >= this.h) continue;
+        const nb = ny * this.w + nx;
+        if (dist[nb] !== -1 || this.terrain[nb] === T.WATER) continue;
+        dist[nb] = d;
+        q[tail++] = nb;
+      }
+    }
+
+    // fronteira: tiles meus adjacentes a neutro que aproximam do alvo
+    type Cand = { from: number; to: number; d: number };
+    const cands: Cand[] = [];
+    for (let i = 0; i < this.n; i++) {
+      if (this.owner[i] !== p.id) continue;
+      const di = dist[i];
+      if (di < 0) continue;
+      const x = i % this.w;
+      const y = (i / this.w) | 0;
+      for (let k = 0; k < 4; k++) {
+        const nx = x + (k === 0 ? 1 : k === 1 ? -1 : 0);
+        const ny = y + (k === 2 ? 1 : k === 3 ? -1 : 0);
+        if (nx < 0 || ny < 0 || nx >= this.w || ny >= this.h) continue;
+        const nb = ny * this.w + nx;
+        if (this.owner[nb] !== -1 || this.terrain[nb] === T.WATER) continue; // só neutro: nunca ataca sozinho
+        const dn = dist[nb];
+        if (dn < 0 || dn >= di) continue;
+        cands.push({ from: i, to: nb, d: dn });
+      }
+    }
+    if (!cands.length) return;
+    cands.sort((a, b) => a.d - b.d);
+
+    let claims = 0;
+    let pulls = 0;
+    for (const c of cands) {
+      if (claims >= EXPAND_MAX_CLAIMS_PER_STEP) break;
+      if (this.owner[c.from] !== p.id || this.owner[c.to] !== -1) continue;
+      const need = this.troops[c.to] * this.defenseMult(c.to, -1);
+      const avail = this.troops[c.from];
+      const moving = (avail - EXPAND_RESERVE) * EXPAND_RATIO;
+      if (moving <= need) {
+        // reforca a fronteira a partir do vizinho proprio mais forte
+        if (pulls >= 2) continue;
+        let src = -1;
+        let srcT = 0;
+        for (const nb of this.neighbors(c.from)) {
+          if (this.owner[nb] !== p.id) continue;
+          if (this.troops[nb] > srcT) {
+            srcT = this.troops[nb];
+            src = nb;
+          }
+        }
+        if (src >= 0 && srcT > EXPAND_RESERVE + 8) {
+          this.resolveAttack(p.id, src, c.from, 1);
+          pulls++;
+        }
+        continue;
+      }
+      if (this.resolveAttack(p.id, c.from, c.to, EXPAND_RATIO)) claims++;
+    }
   }
 
   build(pid: number, tile: number, type: number): boolean {

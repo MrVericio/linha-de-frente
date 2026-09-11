@@ -374,6 +374,10 @@ function handleMessage(c: Client, msg: C2S): void {
         const tile = Math.floor(Number(msg.tile));
         if (!Number.isFinite(tile) || tile < 0 || tile >= g.n) return;
         g.build(c.playerId, tile, Math.floor(Number(msg.type)));
+      } else if (msg.c === 'expand') {
+        const tile = Math.floor(Number(msg.tile));
+        if (!(tile >= -1 && tile < g.n)) return;
+        g.setExpand(c.playerId, tile);
       } else if (msg.c === 'nuke') {
         const from = Math.floor(Number(msg.from));
         const to = Math.floor(Number(msg.to));

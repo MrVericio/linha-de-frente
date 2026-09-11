@@ -1,5 +1,5 @@
-import { World } from './state.js';
-import { Renderer, type Camera, type Explosion } from './render.js';
+import { World, type Region } from './state.js';
+import { Renderer, type Camera, type Explosion, type ExpandMarker } from './render.js';
 import { Game } from '../shared/game.js';
 import { bytesToB64 } from '../shared/codec.js';
 import {
@@ -36,6 +36,8 @@ let nukeMode = false;
 let showNumbers = true;
 let ratio = 0.7;
 let explosions: Explosion[] = [];
+let regions: Region[] = [];
+let lastRegions = 0;
 let mode: 'menu' | 'lobby' | 'playing' | 'over' = 'menu';
 let ws: WebSocket | null = null;
 let wsOk = false;
@@ -209,6 +211,7 @@ function handle(m: S2C): void {
       selected = -1;
       buildType = 0;
       nukeMode = false;
+      regions = [];
       mode = 'playing';
       el.menu.classList.add('hidden');
       el.lobby.classList.add('hidden');
@@ -722,12 +725,42 @@ function setupInput(): void {
       tryBuild(tile);
       return;
     }
-    if (world.owner[tile] === world.you && world.terrain[tile] !== T.WATER) {
+    if (world.terrain[tile] === T.WATER) {
+      hint('Oceano: por enquanto a guerra é só terrestre.');
+      return;
+    }
+    const ownHere = world.owner[tile];
+    if (ownHere === world.you) {
+      // com uma origem selecionada, clicar em outro tile seu = transferencia
+      if (selected >= 0 && selected !== tile && world.owner[selected] === world.you) {
+        const p = world.findPath(selected, tile, world.you);
+        if (p) send({ t: 'cmd', c: 'attack', path: p, ratio: 1 });
+        else hint('Sem caminho pelo seu território.');
+        selected = tile;
+        return;
+      }
       selected = selected === tile ? -1 : tile;
       return;
     }
-    if (wasDrag) return;
-    tryAttack(tile);
+    if (ownHere === -1) {
+      // ordem de expansao: espalha ate encostar em outro jogador
+      send({ t: 'cmd', c: 'expand', tile });
+      selected = -1;
+      hint('🚩 Ordem de expansão: suas tropas fluem para lá e se espalham até fazerem fronteira.');
+      return;
+    }
+    // tile inimigo: ataca se houver fronteira (ou se houver selecao propria)
+    if (selected >= 0 && world.owner[selected] === world.you) {
+      tryAttack(tile);
+      return;
+    }
+    const adj = myBestAdjacent(tile);
+    if (adj >= 0) {
+      selected = adj;
+      tryAttack(tile);
+    } else {
+      hint('Sem fronteira aí. Clique num tile vazio para expandir até ele.');
+    }
   };
   c.addEventListener('pointerup', endPointer);
   c.addEventListener('pointercancel', () => {
@@ -789,6 +822,7 @@ function setupInput(): void {
       buildType = 0;
       nukeMode = false;
       selected = -1;
+      if (canCommand()) send({ t: 'cmd', c: 'expand', tile: -1 });
       refreshBuildBar();
     } else if (k === 'enter') el.chatInput.focus();
   });
@@ -840,6 +874,7 @@ function startOffline(): void {
   selected = -1;
   buildType = 0;
   nukeMode = false;
+  regions = [];
   mode = 'playing';
   el.menu.classList.add('hidden');
   el.lobby.classList.add('hidden');
@@ -858,6 +893,7 @@ function localCommand(msg: C2S): void {
     if (msg.c === 'attack') g.attackChain(0, msg.path, msg.ratio);
     else if (msg.c === 'build') g.build(0, msg.tile, msg.type);
     else if (msg.c === 'nuke') g.nuke(0, msg.from, msg.to);
+    else if (msg.c === 'expand') g.setExpand(0, msg.tile);
   }
 }
 
@@ -886,15 +922,24 @@ function frame(now: number): void {
     if (localGame.state === 'over' && !overShown) showOver(localGame.winner, localGame.winReason);
   }
 
+  if (now - lastRegions > 200 && world.n) {
+    lastRegions = now;
+    regions = world.computeRegions();
+  }
+
   if (hintTimer && now > hintTimer) {
     hintTimer = 0;
     el.hint.classList.add('hidden');
   }
   if (explosions.length) explosions = explosions.filter((e) => now - e.t < 1500);
 
+  const expandTargets: ExpandMarker[] = world.players
+    .filter((p) => p.alive && !p.removed && p.expandTarget >= 0)
+    .map((p) => ({ tile: p.expandTarget, hue: p.hue, me: p.id === world.you }));
+
   renderer.draw({
     world, cam, selected, hover, path, buildType, nukeMode, showNumbers,
-    explosions, now, validBuild: isValidBuildSpot(hover)
+    explosions, now, validBuild: isValidBuildSpot(hover), regions, expandTargets
   });
   if (mode === 'playing' || mode === 'over') updateHud(now);
   requestAnimationFrame(frame);
@@ -1018,7 +1063,41 @@ function bindMenu(): void {
     }
     return null;
   },
-  state: () => ({ mode, zoom: cam.zoom, camx: cam.x, camy: cam.y, you: world.you, state: world.state })
+  state: () => ({ mode, zoom: cam.zoom, camx: cam.x, camy: cam.y, you: world.you, state: world.state }),
+  regionInfo: () => regions.map((r) => ({ owner: r.owner, tiles: r.tiles, troops: Math.round(r.troops), label: r.label })),
+  dbgExpand: () =>
+    localGame
+      ? { tgt: localGame.players[0]?.expandTarget, tiles: localGame.players[0]?.tiles, state: localGame.state, you: world.you, wState: world.state }
+      : null,
+  centerOnTile: (i: number, zoom?: number) => {
+    if (zoom) cam.zoom = zoom;
+    cam.x = ((i % world.w) + 0.5) * cam.zoom;
+    cam.y = (Math.floor(i / world.w) + 0.5) * cam.zoom;
+    renderer.clampCamera(cam, world);
+  },
+  /** tile neutro a uma distancia minima do territorio do jogador */
+  farNeutral: (minDist = 8) => {
+    const mine: number[] = [];
+    for (let i = 0; i < world.n; i++) if (world.owner[i] === world.you) mine.push(i);
+    if (!mine.length) return -1;
+    let best = -1;
+    let bestScore = -1;
+    for (let i = 0; i < world.n; i++) {
+      if (world.owner[i] !== -1 || world.terrain[i] === 0) continue;
+      const x = i % world.w;
+      const y = Math.floor(i / world.w);
+      let dMin = Infinity;
+      for (const m of mine) {
+        const d = Math.abs((m % world.w) - x) + Math.abs(Math.floor(m / world.w) - y);
+        if (d < dMin) dMin = d;
+      }
+      if (dMin >= minDist && dMin > bestScore) {
+        bestScore = dMin;
+        best = i;
+      }
+    }
+    return best;
+  }
 };
 
 function boot(): void {

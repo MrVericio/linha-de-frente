@@ -13,6 +13,10 @@ ou sendo o último império de pé.
 
 ![gameplay](screens/06-tarde.png)
 
+*Números centralizados por região + bandeirinha de ordem de expansão:*
+
+![expansao](screens/11-expansao-fluxo.png)
+
 ---
 
 ## Rodando
@@ -43,13 +47,18 @@ Sem servidor por perto? O menu tem **“Jogar offline”** — a mesma simulaç�
 | mover câmera | `WASD`/setas, arrastar área vazia, arrastar no minimapa |
 | zoom | roda do mouse, `Q`/`E` |
 | centralizar no seu império | `C` |
-| selecionar tile seu | clique |
-| atacar | selecione e clique no alvo — ou **arraste** a partir do seu território |
+| **expandir** | **clique num tile vazio**: vira ordem de expansão — suas tropas fluem e se espalham sozinhas até encostar em outro jogador (sem atacar); `Esc` cancela |
+| **atacar** | **clique num tile inimigo na sua fronteira** (ataque direto) — ou selecione um tile seu e clique no alvo; arrastar a partir do seu território também ataca |
+| transferir tropas | selecione um tile seu e clique em outro tile seu |
+| selecionar / desmarcar | clique num tile seu (com outra origem selecionada, transfere) |
 | construir | `3` cidade · `4` posto · `5` porto · `6` silo, depois clique num tile seu |
 | míssil nuclear | `N`, clique no alvo (círculos = alcance/raio) |
 | força do ataque | slider ou `1`/`2` |
 | números de tropas | `Espaço` |
 | chat | `Enter` |
+
+**Números de tropas:** um único número **centralizado por região conectada** (não tile a tile),
+crescendo em tempo real; o alvo da ordem de expansão ganha uma bandeirinha pulsante na cor do dono.
 
 **Regras em uma linha:** tropas crescem por tile (teto maior em cidades), ouro vem de território +
 cidades + portos, postos multiplicam a defesa, montanhas defendem mais, e a **morte súbita**
@@ -66,6 +75,7 @@ src/
     mapgen.ts        ← continentes proceduralmente (value-noise + fbm, semente reproducivel)
     game.ts          ← tick, combate, construcoes, nucleares, vitoria, diffs de rede
     bot.ts           ← IA: ondas de agressao, ataques convergentes, fluxo BFS de reforco
+                       (game.ts inclui a ordem de expansao: BFS do alvo + conquista só de neutro)
     codec.ts         ← base64 portatil + quantizacao de tropas (economiza banda)
     protocol.ts      ← contratos cliente<->servidor
   server/
@@ -108,6 +118,7 @@ servidor → cliente: welcome | rooms | joined | lobby | map | tick | over | cha
 | teste | comando | o que prova |
 |---|---|---|
 | Simulação | `npm run simtest -- 1200 12 4242` | bots jogam sozinhos: sem NaN, sem tile duplicado, eliminação e vitória acontecem, ~200-300× tempo real |
+| Expansão | `node dist/expandtest.cjs 555 240` | ordem de expansão só toma neutro, **nunca** toma tile de outro jogador (para na fronteira) |
 | Protocolo | `node scripts/wstest.mjs` | 13 checagens ponta-a-ponta: lobby, mapa, ataque, construção, rejeições, espectador, chat, ticks |
 | Navegador | `node scripts/browser-test.mjs` | Chrome real (puppeteer): menu→lobby→partida, 60 fps, clique/arraste/construção/chat, modo offline; salva screenshots em `screens/` |
 | Carga | `N=8 SECONDS=60 node scripts/soak.mjs` | 8 clientes agindo como humanos por 60 s: 0 quedas, ~10 ticks/s por cliente |
