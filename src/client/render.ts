@@ -1,12 +1,6 @@
 import { T, B, NUKE_RANGE, NUKE_R_CORE, NUKE_R_OUTER } from '../shared/constants.js';
 import type { Region, World } from './state.js';
 
-export interface ExpandMarker {
-  tile: number;
-  hue: number;
-  me: boolean;
-}
-
 export interface Camera {
   x: number; // centro da camera em coordenadas de mundo (pixels)
   y: number;
@@ -32,7 +26,6 @@ export interface Scene {
   now: number;
   validBuild: boolean;
   regions: Region[];
-  expandTargets: ExpandMarker[];
 }
 
 const colorCache = new Map<string, string>();
@@ -60,6 +53,8 @@ export class Renderer {
   private layerCtx: CanvasRenderingContext2D | null = null;
   private layerImg: ImageData | null = null;
   private layerRev = -1;
+  /** contornos suavizados (costa + dono), retracejados só quando o mundo muda */
+  private contours: { rev: number; land: number[][]; owners: Map<number, number[][]> } | null = null;
 
   constructor(canvas: HTMLCanvasElement, mini: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -101,7 +96,7 @@ export class Renderer {
     const cam = s.cam;
     const z = cam.zoom;
 
-    ctx.fillStyle = '#0a1420';
+    ctx.fillStyle = '#0a1628';
     ctx.fillRect(0, 0, this.vw, this.vh);
     if (!w.n) return;
 
@@ -148,38 +143,67 @@ export class Renderer {
       }
       this.layerCtx!.putImageData(img, 0, 0);
     }
-    ctx.imageSmoothingEnabled = false;
+    ctx.imageSmoothingEnabled = true; // blend bilinear: transicoes "onduladas" entre territorios
     ctx.drawImage(this.layer, 0, 0, w.w, w.h, Math.round(ox), Math.round(oy), Math.ceil(w.w * z) + 1, Math.ceil(w.h * z) + 1);
+    ctx.imageSmoothingEnabled = false;
 
-    // ------- fronteiras -------
-    if (z >= 4.5) {
-      ctx.lineWidth = Math.max(1, z * 0.09);
-      ctx.strokeStyle = 'rgba(6,10,16,0.55)';
+    // ------- contornos organicos (costa + fronteiras) -------
+    if (!this.contours || this.contours.rev !== w.rev) this.contours = this.buildContours(w);
+    const cont = this.contours;
+    for (const loop of cont.land) {
+      this.strokeSmooth(loop, z, ox, oy, 'rgba(4,8,14,0.9)', Math.max(2, z * 0.16));
+    }
+    for (const loops of cont.owners.values()) {
+      for (const loop of loops) {
+        this.strokeSmooth(loop, z, ox, oy, 'rgba(5,8,13,0.95)', Math.max(1.8, z * 0.14));
+        this.strokeSmooth(loop, z, ox, oy, 'rgba(255,255,255,0.10)', Math.max(1, z * 0.05));
+      }
+    }
+
+    // ------- serras: cristas estilizadas sobre montanhas -------
+    if (z >= 6) {
+      const snow: number[] = [];
       ctx.beginPath();
+      let hasRidge = false;
       for (let y = y0; y <= y1; y++) {
         for (let x = x0; x <= x1; x++) {
           const i = y * w.w + x;
-          if (w.terrain[i] === T.WATER) continue;
-          const o = w.owner[i];
-          if (x + 1 <= x1) {
-            const j = i + 1;
-            if (w.terrain[j] !== T.WATER && w.owner[j] !== o) {
-              const px = Math.round(ox + (x + 1) * z);
-              ctx.moveTo(px, Math.round(oy + y * z));
-              ctx.lineTo(px, Math.round(oy + (y + 1) * z));
-            }
-          }
-          if (y + 1 <= y1) {
-            const j = i + w.w;
-            if (w.terrain[j] !== T.WATER && w.owner[j] !== o) {
-              const py = Math.round(oy + (y + 1) * z);
-              ctx.moveTo(Math.round(ox + x * z), py);
-              ctx.lineTo(Math.round(ox + (x + 1) * z), py);
-            }
-          }
+          if (w.terrain[i] !== T.MOUNTAIN) continue;
+          hasRidge = true;
+          const cx = ox + (x + 0.5) * z;
+          const cy = oy + (y + 0.5) * z;
+          const t = w.shade[i] % 5;
+          const jx = (t - 2) * z * 0.03;
+          const h1 = z * (0.2 + (t % 3) * 0.02);
+          ctx.moveTo(cx - 0.3 * z + jx, cy + 0.2 * z);
+          ctx.lineTo(cx - 0.07 * z + jx, cy - h1);
+          ctx.lineTo(cx + 0.16 * z + jx, cy + 0.2 * z);
+          ctx.moveTo(cx + 0.02 * z + jx, cy + 0.2 * z);
+          ctx.lineTo(cx + 0.2 * z + jx, cy - h1 * 0.55);
+          ctx.lineTo(cx + 0.38 * z + jx, cy + 0.2 * z);
+          snow.push(
+            cx - 0.14 * z + jx, cy - h1 * 0.42,
+            cx - 0.07 * z + jx, cy - h1,
+            cx + 0.0 * z + jx, cy - h1 * 0.42
+          );
         }
       }
-      ctx.stroke();
+      if (hasRidge) {
+        ctx.strokeStyle = 'rgba(8,12,18,0.42)';
+        ctx.lineWidth = Math.max(1, z * 0.05);
+        ctx.stroke();
+      }
+      if (snow.length) {
+        ctx.beginPath();
+        for (let k = 0; k < snow.length; k += 6) {
+          ctx.moveTo(snow[k], snow[k + 1]);
+          ctx.lineTo(snow[k + 2], snow[k + 3]);
+          ctx.lineTo(snow[k + 4], snow[k + 5]);
+        }
+        ctx.strokeStyle = 'rgba(255,255,255,0.38)';
+        ctx.lineWidth = Math.max(1, z * 0.045);
+        ctx.stroke();
+      }
     }
 
     // ------- caminho / selecao / hover -------
@@ -247,36 +271,6 @@ export class Renderer {
         ctx.strokeText(String(w.troops[i]), lx, ly);
         ctx.fillText(String(w.troops[i]), lx, ly);
       }
-    }
-
-    // ------- marcadores de ordem de expansao -------
-    for (const et of s.expandTargets) {
-      if (et.tile < 0 || et.tile >= w.n) continue;
-      const ex = ox + ((et.tile % w.w) + 0.5) * z;
-      const ey = oy + (Math.floor(et.tile / w.w) + 0.5) * z;
-      if (ex < -80 || ey < -80 || ex > this.vw + 80 || ey > this.vh + 80) continue;
-      const pulse = (s.now % 900) / 900;
-      const col = `hsl(${et.hue} 85% 62%)`;
-      ctx.save();
-      ctx.strokeStyle = col;
-      ctx.lineWidth = Math.max(1.5, z * 0.1);
-      ctx.globalAlpha = 0.95 - pulse * 0.55;
-      ctx.beginPath();
-      ctx.arc(ex, ey, z * (0.55 + pulse * 0.75), 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.globalAlpha = 1;
-      // bandeirinha
-      const fs = Math.max(8, z * 0.5);
-      ctx.beginPath();
-      ctx.moveTo(ex, ey - fs * 1.1);
-      ctx.lineTo(ex, ey + fs * 0.5);
-      ctx.moveTo(ex, ey - fs * 1.1);
-      ctx.lineTo(ex + fs * 0.85, ey - fs * 0.75);
-      ctx.lineTo(ex, ey - fs * 0.4);
-      ctx.strokeStyle = et.me ? '#ffffff' : col;
-      ctx.lineWidth = Math.max(1.5, z * 0.09);
-      ctx.stroke();
-      ctx.restore();
     }
 
     // ------- modo missil -------
@@ -356,55 +350,236 @@ export class Renderer {
     const ctx = this.ctx;
     const p = owner >= 0 ? w.playerById(owner) : undefined;
     const hue = p ? p.hue : 0;
-    const s = z * 0.34;
+    const s = z * 0.40;
+    const lw = Math.max(1, z * 0.05);
+    const ink = 'rgba(6,10,16,0.92)';
+    const paper = hsl(hue, 18, 93);
     ctx.save();
     ctx.translate(cx, cy);
-    ctx.lineWidth = Math.max(1, z * 0.06);
-    ctx.strokeStyle = 'rgba(8,12,18,0.85)';
-    ctx.fillStyle = hsl(hue, 20, 92);
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = lw;
+    ctx.strokeStyle = ink;
     if (b === B.CITY) {
-      ctx.fillStyle = hsl(hue, 25, 94);
-      ctx.fillRect(-s, -s * 0.5, s * 0.55, s * 1.5);
-      ctx.fillRect(-s * 0.25, -s, s * 0.6, s * 2);
-      ctx.fillRect(s * 0.5, -s * 0.2, s * 0.5, s * 1.2);
-      ctx.strokeRect(-s, -s, s * 2, s * 2);
+      // skyline: tres torres ameadas com contorno
+      const towers: [number, number, number, number][] = [
+        [-s * 1.0, -s * 0.45, s * 0.62, s * 1.5],
+        [-s * 0.3, -s * 1.05, s * 0.66, s * 2.1],
+        [s * 0.45, -s * 0.2, s * 0.58, s * 1.25]
+      ];
+      ctx.fillStyle = paper;
+      for (const [tx, ty, tw, th] of towers) {
+        ctx.fillRect(tx, ty, tw, th);
+        ctx.strokeRect(tx, ty, tw, th);
+      }
+      // ameias na torre central
+      ctx.fillStyle = ink;
+      ctx.fillRect(-s * 0.3, -s * 1.05, s * 0.16, s * 0.16);
+      ctx.fillRect(-s * 0.02, -s * 1.05, s * 0.16, s * 0.16);
+      ctx.fillRect(s * 0.22, -s * 1.05, s * 0.14, s * 0.16);
+      // janelas quando o zoom permite
+      if (z >= 10) {
+        ctx.fillStyle = 'rgba(20,30,46,0.55)';
+        const ws = Math.max(1, z * 0.05);
+        for (const [tx, ty, tw, th] of towers) {
+          ctx.fillRect(tx + tw * 0.3, ty + th * 0.22, ws, ws);
+          ctx.fillRect(tx + tw * 0.3, ty + th * 0.5, ws, ws);
+        }
+      }
     } else if (b === B.OUTPOST) {
+      // escudo com faixa na cor do dono
       ctx.beginPath();
       ctx.moveTo(0, -s * 1.15);
-      ctx.lineTo(s * 1.05, s * 0.95);
-      ctx.lineTo(-s * 1.05, s * 0.95);
+      ctx.lineTo(s * 0.92, -s * 0.62);
+      ctx.lineTo(s * 0.92, s * 0.18);
+      ctx.quadraticCurveTo(s * 0.92, s * 1.0, 0, s * 1.3);
+      ctx.quadraticCurveTo(-s * 0.92, s * 1.0, -s * 0.92, s * 0.18);
+      ctx.lineTo(-s * 0.92, -s * 0.62);
       ctx.closePath();
+      ctx.fillStyle = paper;
       ctx.fill();
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(0, -s * 0.72);
+      ctx.lineTo(0, s * 0.85);
+      ctx.strokeStyle = hsl(hue, 55, 45);
+      ctx.lineWidth = Math.max(1.2, z * 0.07);
       ctx.stroke();
     } else if (b === B.PORT) {
-      ctx.beginPath();
-      ctx.arc(0, 0, s * 0.95, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.moveTo(-s * 0.75, s * 0.15);
-      ctx.lineTo(s * 0.75, s * 0.15);
-      ctx.moveTo(0, -s * 0.7);
-      ctx.lineTo(0, s * 0.8);
-      ctx.strokeStyle = hsl(hue, 45, 30);
-      ctx.stroke();
+      // ancora: traco claro sobre sombra escura
+      const draw = (style: string, wL: number) => {
+        ctx.strokeStyle = style;
+        ctx.lineWidth = wL;
+        ctx.beginPath();
+        ctx.arc(0, -s * 0.85, s * 0.26, 0, Math.PI * 2); // anel
+        ctx.moveTo(0, -s * 0.59);
+        ctx.lineTo(0, s * 0.8); // haste
+        ctx.moveTo(-s * 0.55, -s * 0.32);
+        ctx.lineTo(s * 0.55, -s * 0.32); // cepo
+        ctx.moveTo(-s * 0.62, s * 0.36);
+        ctx.lineTo(-s * 0.78, s * 0.06); // unha esq
+        ctx.moveTo(s * 0.62, s * 0.36);
+        ctx.lineTo(s * 0.78, s * 0.06); // unha dir
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(0, s * 0.18, s * 0.62, Math.PI * 0.16, Math.PI * 0.84); // bracos
+        ctx.stroke();
+      };
+      draw('rgba(6,10,16,0.85)', Math.max(2, z * 0.1));
+      draw(paper, Math.max(1.2, z * 0.06));
     } else if (b === B.SILO) {
+      // missil com estabilizadores e faixa vermelha
       ctx.beginPath();
-      ctx.moveTo(0, -s * 1.2);
-      ctx.lineTo(s * 0.85, 0);
-      ctx.lineTo(0, s * 1.2);
-      ctx.lineTo(-s * 0.85, 0);
+      ctx.moveTo(0, -s * 1.4);
+      ctx.bezierCurveTo(s * 0.5, -s * 0.95, s * 0.5, -s * 0.3, s * 0.44, s * 0.6);
+      ctx.lineTo(-s * 0.44, s * 0.6);
+      ctx.bezierCurveTo(-s * 0.5, -s * 0.3, -s * 0.5, -s * 0.95, 0, -s * 1.4);
       ctx.closePath();
-      ctx.fillStyle = '#ffd7d0';
+      ctx.fillStyle = '#f0e7e2';
       ctx.fill();
-      ctx.strokeStyle = 'rgba(120,20,10,0.9)';
       ctx.stroke();
       ctx.beginPath();
-      ctx.arc(0, 0, s * 0.3, 0, Math.PI * 2);
-      ctx.fillStyle = '#c22';
+      ctx.moveTo(-s * 0.42, s * 0.1);
+      ctx.lineTo(-s * 0.85, s * 0.75);
+      ctx.lineTo(-s * 0.42, s * 0.6);
+      ctx.closePath();
+      ctx.moveTo(s * 0.42, s * 0.1);
+      ctx.lineTo(s * 0.85, s * 0.75);
+      ctx.lineTo(s * 0.42, s * 0.6);
+      ctx.closePath();
+      ctx.fillStyle = '#9c2f24';
       ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = '#c22';
+      ctx.fillRect(-s * 0.4, -s * 0.35, s * 0.8, s * 0.3);
+      ctx.lineWidth = Math.max(0.8, z * 0.03);
+      ctx.strokeRect(-s * 0.4, -s * 0.35, s * 0.8, s * 0.3);
     }
     ctx.restore();
+  }
+
+  /**
+   * Traca o contorno de uma mascara (loops fechados em coordenadas de canto
+   * de tile) encadeando as arestas da grade — base para o visual "ondulado".
+   */
+  private collectLoops(w: World, mask: (i: number) => boolean): number[][] {
+    // marching squares nos cantos da grade: cada canto emparelha os stubs de
+    // contorno ao seu redor (sela desambiguada pela diagonal preenchida),
+    // garantindo loops fechados sem cadeias abertas.
+    const m = (x: number, y: number): boolean =>
+      x >= 0 && y >= 0 && x < w.w && y < w.h && mask(y * w.w + x);
+    const adj = new Map<number, number[]>();
+    const link = (a: number, b: number) => {
+      let la = adj.get(a);
+      if (!la) { la = []; adj.set(a, la); }
+      la.push(b);
+      let lb = adj.get(b);
+      if (!lb) { lb = []; adj.set(b, lb); }
+      lb.push(a);
+    };
+    const H = 262144;
+    const hid = (gx: number, gy: number) => gy * 512 + gx; // horizontal em y=gy
+    const vid = (gx: number, gy: number) => H + gx * 512 + gy; // vertical em x=gx
+    for (let cy = 0; cy <= w.h; cy++) {
+      for (let cx = 0; cx <= w.w; cx++) {
+        const A = m(cx - 1, cy - 1), B = m(cx, cy - 1), C = m(cx - 1, cy), D = m(cx, cy);
+        const u = A !== B, l = A !== C, r = B !== D, d = C !== D;
+        const cnt = (u ? 1 : 0) + (l ? 1 : 0) + (r ? 1 : 0) + (d ? 1 : 0);
+        if (cnt === 0) continue;
+        const U = vid(cx, cy - 1), L = hid(cx - 1, cy), R = hid(cx, cy), Ds = vid(cx, cy);
+        if (cnt === 2) {
+          const stubs: number[] = [];
+          if (u) stubs.push(U);
+          if (l) stubs.push(L);
+          if (r) stubs.push(R);
+          if (d) stubs.push(Ds);
+          link(stubs[0], stubs[1]);
+        } else if (cnt === 4) {
+          if (A && D) { link(U, L); link(R, Ds); } else { link(U, R); link(L, Ds); }
+        }
+      }
+    }
+    const pt = (id: number, end: 0 | 1): [number, number] => {
+      if (id < H) {
+        const gy = Math.floor(id / 512), gx = id % 512;
+        return end === 0 ? [gx, gy] : [gx + 1, gy];
+      }
+      const gx = Math.floor((id - H) / 512), gy = (id - H) % 512;
+      return end === 0 ? [gx, gy] : [gx, gy + 1];
+    };
+    const loops: number[][] = [];
+    const used = new Set<number>();
+    for (const startId of adj.keys()) {
+      if (used.has(startId)) continue;
+      const loop: number[] = [];
+      let cur = startId;
+      let fromEnd: 0 | 1 = 0;
+      let guard = 0;
+      while (guard++ < 200000) {
+        used.add(cur);
+        const p0 = pt(cur, 0), p1 = pt(cur, 1);
+        const fe: number = fromEnd;
+        const enter: [number, number] = fe === 0 ? p0 : p1;
+        const exit: [number, number] = fe === 0 ? p1 : p0;
+        loop.push(enter[0], enter[1]);
+        let next = -1;
+        for (const c of adj.get(cur) ?? []) {
+          if (used.has(c)) continue;
+          const q0 = pt(c, 0), q1 = pt(c, 1);
+          if ((q0[0] === exit[0] && q0[1] === exit[1]) || (q1[0] === exit[0] && q1[1] === exit[1])) { next = c; break; }
+        }
+        if (next < 0) break;
+        const q0 = pt(next, 0);
+        fromEnd = q0[0] === exit[0] && q0[1] === exit[1] ? 0 : 1;
+        cur = next;
+        if (cur === startId) break;
+      }
+      if (loop.length >= 8) loops.push(loop);
+    }
+    return loops;
+  }
+
+  private buildContours(w: World): { rev: number; land: number[][]; owners: Map<number, number[][]> } {
+    const land = this.collectLoops(w, (i) => w.terrain[i] !== T.WATER);
+    const owners = new Map<number, number[][]>();
+    for (const p of w.players) {
+      if (!p.alive) continue;
+      const id = p.id;
+      const loops = this.collectLoops(w, (i) => w.owner[i] === id);
+      if (loops.length) owners.set(id, loops);
+    }
+    return { rev: w.rev, land, owners };
+  }
+
+  /** Desenha um loop suavizado (quadraticas pelos pontos medios) — o efeito "onda". */
+  private strokeSmooth(loop: number[], z: number, ox: number, oy: number, style: string, lw: number): void {
+    const ctx = this.ctx;
+    const n = loop.length / 2;
+    if (n < 3) return;
+    // culling rapido por bbox
+    let minx = 1e9, miny = 1e9, maxx = -1e9, maxy = -1e9;
+    for (let k = 0; k < n; k++) {
+      const x = loop[k * 2], y = loop[k * 2 + 1];
+      if (x < minx) minx = x;
+      if (y < miny) miny = y;
+      if (x > maxx) maxx = x;
+      if (y > maxy) maxy = y;
+    }
+    if (ox + maxx * z < -40 || ox + minx * z > this.vw + 40 || oy + maxy * z < -40 || oy + miny * z > this.vh + 40) return;
+    const px = (k: number): number => ox + loop[(k % n) * 2] * z;
+    const py = (k: number): number => oy + loop[(k % n) * 2 + 1] * z;
+    ctx.beginPath();
+    ctx.moveTo((px(0) + px(1)) / 2, (py(0) + py(1)) / 2);
+    for (let k = 1; k <= n; k++) {
+      const a = k % n;
+      const b = (k + 1) % n;
+      ctx.quadraticCurveTo(px(a), py(a), (px(a) + px(b)) / 2, (py(a) + py(b)) / 2);
+    }
+    ctx.closePath();
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = style;
+    ctx.lineWidth = lw;
+    ctx.stroke();
   }
 
   private drawMinimap(w: World): void {
@@ -421,15 +596,15 @@ export class Renderer {
         const own = w.owner[i];
         let r: number, g: number, b: number;
         if (ter === T.WATER) {
-          r = 16; g = 38; b = 62;
+          r = 10; g = 22; b = 40;
         } else if (own >= 0) {
           const p = w.playerById(own);
-          const c = hueToRgb(p ? p.hue : 0, p && !p.alive ? 0.4 : 0.62, 0.5);
+          const c = hueToRgb(p ? p.hue : 0, p && !p.alive ? 0.4 : 0.5, 0.56);
           r = c[0]; g = c[1]; b = c[2];
         } else {
-          r = ter === T.MOUNTAIN ? 96 : 116;
-          g = ter === T.MOUNTAIN ? 92 : 122;
-          b = ter === T.MOUNTAIN ? 84 : 96;
+          r = ter === T.MOUNTAIN ? 92 : 110;
+          g = ter === T.MOUNTAIN ? 88 : 118;
+          b = ter === T.MOUNTAIN ? 80 : 92;
         }
         const px0 = Math.floor(x * sx);
         const py0 = Math.floor(y * sy);
@@ -498,17 +673,21 @@ function terrRgb(hue: number, mountain: boolean, dead: boolean): number[] {
   const key = `${hue}|${mountain ? 1 : 0}|${dead ? 1 : 0}`;
   let c = terrCache.get(key);
   if (!c) {
-    c = hueToRgb(hue, mountain ? (dead ? 17 : 34) : (dead ? 28 : 56), mountain ? (dead ? 20 : 30) : (dead ? 30 : 44));
+    // preenchimentos "pastel" dessaturados: territorio claro, montanha um tom acima
+    // (hueToRgb espera s/l em 0..1)
+    const s = (mountain ? (dead ? 14 : 30) : (dead ? 24 : 46)) / 100;
+    const l = (mountain ? (dead ? 22 : 40) : (dead ? 30 : 56)) / 100;
+    c = hueToRgb(hue, s, l);
     terrCache.set(key, c);
   }
   return c;
 }
 
 const layerColorCache = {
-  waterDeep: [14, 34, 58],
-  waterShallow: [24, 52, 78],
-  neutralLand: [112, 120, 96],
-  neutralMountain: [96, 92, 84]
+  waterDeep: [10, 22, 40],
+  waterShallow: [26, 56, 90],
+  neutralLand: [110, 118, 92],
+  neutralMountain: [92, 88, 80]
 };
 
 function fmtTroops(t: number): string {

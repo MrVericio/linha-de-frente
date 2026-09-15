@@ -111,24 +111,33 @@ try {
   await wait(400);
 
   // ---- NOVO MODELO: clique em tile vazio = ordem de expansao ----
+  const nBefore = await page.evaluate(() => window.__ldf.myTiles().length);
   const tilesBefore = await page.$eval('#sTiles', (e) => e.textContent);
-  const farTile = await page.evaluate(() => window.__ldf.farNeutral(10));
+  let farTile = await page.evaluate(() => window.__ldf.farNeutral(10));
   check('existe tile vazio distante para mirar', farTile >= 0);
-  // centraliza a camera no alvo para o clique cair longe dos paineis de HUD
-  await page.evaluate((i) => window.__ldf.centerOnTile(i, 14), farTile);
-  await wait(300);
-  const fpos = await page.evaluate((i) => window.__ldf.tileToScreen(i), farTile);
-  await page.mouse.click(box.x + fpos.x, box.y + fpos.y);
-  await wait(500);
-  const tgt = await page.evaluate(
-    () => window.__ldf.world.players.find((p) => p.id === window.__ldf.world.you)?.expandTarget
-  );
+  // bots rapidos podem roubar o tile entre a escolha e o clique: tenta 2x
+  let tgt = -1;
+  for (let tentativa = 0; tentativa < 2 && tgt !== farTile; tentativa++) {
+    if (tentativa > 0) {
+      farTile = await page.evaluate(() => window.__ldf.farNeutral(10));
+    }
+    // centraliza a camera no alvo para o clique cair longe dos paineis de HUD
+    await page.evaluate((i) => window.__ldf.centerOnTile(i, 14), farTile);
+    await wait(300);
+    const fpos = await page.evaluate((i) => window.__ldf.tileToScreen(i), farTile);
+    await page.mouse.click(box.x + fpos.x, box.y + fpos.y);
+    await wait(500);
+    tgt = await page.evaluate(
+      () => window.__ldf.world.players.find((p) => p.id === window.__ldf.world.you)?.expandTarget
+    );
+  }
   check('clique no vazio vira ordem de expansao (marcador no alvo)', tgt === farTile, `alvo=${tgt}`);
   await wait(9000);
+  const nAfter = await page.evaluate(() => window.__ldf.myTiles().length);
   const tilesAfter = await page.$eval('#sTiles', (e) => e.textContent);
   check('tropas fluem e se espalham sozinhas ate o alvo',
-    parseFloat(tilesAfter) > parseFloat(tilesBefore),
-    `territorio ${tilesBefore} -> ${tilesAfter}`);
+    nAfter > nBefore,
+    `tiles ${nBefore} -> ${nAfter} (HUD ${tilesBefore} -> ${tilesAfter})`);
 
   // numeros centralizados por regiao
   const regs = await page.evaluate(() => window.__ldf.regionInfo());
@@ -158,6 +167,39 @@ try {
     }
   }
   check('clique na fronteira conquista o tile vizinho', !!pair && conquered);
+
+  // clique em tile inimigo = ordem de invasao continua (ocupar enquanto houver tropa)
+  const foeTile = await page.evaluate(() => {
+    const w = window.__ldf.world;
+    const mine = window.__ldf.myTiles();
+    for (const i of mine) {
+      for (const j of [i - 1, i + 1, i - w.w, i + w.w]) {
+        if (j < 0 || j >= w.n) continue;
+        if (w.owner[j] >= 0 && w.owner[j] !== w.you && w.terrain[j] !== 0) return j;
+      }
+    }
+    // sem fronteira ainda: qualquer tile inimigo serve (ordem aceita a distancia)
+    for (let j = 0; j < w.n; j++) {
+      if (w.owner[j] >= 0 && w.owner[j] !== w.you) return j;
+    }
+    return -1;
+  });
+  let invadeOk = false;
+  let invadeConq = false;
+  if (foeTile >= 0) {
+    await page.evaluate((i) => window.__ldf.centerOnTile(i, 16), foeTile);
+    await wait(250);
+    const fpos2 = await page.evaluate((i) => window.__ldf.tileToScreen(i), foeTile);
+    await page.mouse.click(box.x + fpos2.x, box.y + fpos2.y);
+    await wait(400);
+    invadeOk =
+      (await page.evaluate(
+        () => window.__ldf.world.players.find((p) => p.id === window.__ldf.world.you)?.invadeTarget
+      )) === foeTile;
+    await wait(4000);
+    invadeConq = (await page.evaluate((i) => window.__ldf.world.owner[i], foeTile)) === 0;
+  }
+  check('clique em inimigo vira ordem de invasao continua', foeTile >= 0 && invadeOk, `alvo=${foeTile} conquistado=${invadeConq}`);
 
   await shot('04-apos-interacao.png');
 

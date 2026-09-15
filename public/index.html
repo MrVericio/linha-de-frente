@@ -4,12 +4,12 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
 <title>Linha de Frente — RTS de conquista territorial</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230a1420'/%3E%3Cpath d='M6 22 L16 8 L26 22 Z' fill='%234fd1c5'/%3E%3Crect x='13' y='20' width='6' height='6' fill='%23ffb454'/%3E%3C/svg%3E" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230a1628'/%3E%3Cpath d='M6 22 L16 8 L26 22 Z' fill='%233fa9f5'/%3E%3Crect x='13' y='20' width='6' height='6' fill='%23ffb454'/%3E%3C/svg%3E" />
 <style>
   :root{
-    --bg:#0a1420; --panel:rgba(16,26,40,.82); --panel2:rgba(22,34,52,.9);
+    --bg:#0a1628; --panel:rgba(16,26,40,.82); --panel2:rgba(22,34,52,.9);
     --line:rgba(140,180,220,.18); --txt:#e8f0fa; --mut:#93a7bf;
-    --acc:#4fd1c5; --warn:#ffb454; --bad:#ff6b6b; --good:#7ee787;
+    --acc:#3fa9f5; --warn:#ffb454; --bad:#ff6b6b; --good:#7ee787;
     --r:14px;
   }
   *{box-sizing:border-box}
@@ -18,16 +18,16 @@
     -webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
   canvas{display:block}
   #game{position:fixed;inset:0;width:100%;height:100%;touch-action:none;cursor:crosshair}
-  button{font:inherit;color:var(--txt);background:linear-gradient(180deg,rgba(79,209,197,.22),rgba(79,209,197,.10));
-    border:1px solid rgba(79,209,197,.45);border-radius:10px;padding:8px 12px;cursor:pointer;transition:.15s}
-  button:hover:not(:disabled){background:linear-gradient(180deg,rgba(79,209,197,.38),rgba(79,209,197,.18));transform:translateY(-1px)}
+  button{font:inherit;color:var(--txt);background:linear-gradient(180deg,rgba(63,169,245,.22),rgba(63,169,245,.10));
+    border:1px solid rgba(63,169,245,.45);border-radius:10px;padding:8px 12px;cursor:pointer;transition:.15s}
+  button:hover:not(:disabled){background:linear-gradient(180deg,rgba(63,169,245,.38),rgba(63,169,245,.18));transform:translateY(-1px)}
   button:disabled{opacity:.42;cursor:not-allowed}
   button.ghost{background:rgba(255,255,255,.05);border-color:var(--line)}
   button.ghost:hover:not(:disabled){background:rgba(255,255,255,.11)}
   button.danger{background:linear-gradient(180deg,rgba(255,107,107,.25),rgba(255,107,107,.1));border-color:rgba(255,107,107,.5)}
   input,select{font:inherit;color:var(--txt);background:rgba(8,14,22,.75);border:1px solid var(--line);
     border-radius:9px;padding:8px 10px;outline:none;width:100%}
-  input:focus,select:focus{border-color:rgba(79,209,197,.6)}
+  input:focus,select:focus{border-color:rgba(63,169,245,.6)}
   .panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);
     backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);box-shadow:0 10px 30px rgba(0,0,0,.35)}
   .hidden{display:none!important}
@@ -51,7 +51,7 @@
   .rk .dot{width:10px;height:10px;border-radius:3px}
   .rk .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .rk .pc{font-variant-numeric:tabular-nums;color:var(--mut);font-size:11.5px}
-  .rk.me{background:rgba(79,209,197,.13);border-radius:7px;padding-left:4px;padding-right:4px}
+  .rk.me{background:rgba(63,169,245,.13);border-radius:7px;padding-left:4px;padding-right:4px}
   .rk.dead{opacity:.45;text-decoration:line-through}
   .bar{grid-column:1/-1;height:3px;border-radius:2px;background:rgba(255,255,255,.09);overflow:hidden;margin-top:1px}
   .bar i{display:block;height:100%}
@@ -60,7 +60,7 @@
   .bbtn{display:flex;flex-direction:column;align-items:center;gap:3px;min-width:86px;padding:8px 10px;border-radius:11px;
     background:rgba(255,255,255,.05);border:1px solid var(--line);cursor:pointer;transition:.15s}
   .bbtn:hover{background:rgba(255,255,255,.11)}
-  .bbtn.on{border-color:var(--acc);background:rgba(79,209,197,.2);box-shadow:0 0 0 1px rgba(79,209,197,.35) inset}
+  .bbtn.on{border-color:var(--acc);background:rgba(63,169,245,.2);box-shadow:0 0 0 1px rgba(63,169,245,.35) inset}
   .bbtn.poor{opacity:.45}
   .bbtn b{font-size:12.5px}
   .bbtn span{font-size:10.5px;color:var(--mut)}
@@ -75,7 +75,7 @@
   #chatlog{max-height:16vh}
 
   #minibox{position:absolute;bottom:12px;right:10px;padding:7px}
-  #minimap{width:210px;height:154px;border-radius:9px;background:#0a1420;cursor:crosshair;display:block}
+  #minimap{width:210px;height:154px;border-radius:9px;background:#0a1628;cursor:crosshair;display:block}
 
   #ratio{position:absolute;bottom:12px;right:calc(10px + 224px);padding:9px 11px;width:186px}
   #ratio input[type=range]{width:100%;padding:0}
@@ -87,13 +87,36 @@
 
   /* ---------- telas ---------- */
   .screen{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;padding:18px;
-    background:radial-gradient(1200px 700px at 50% -10%,rgba(79,209,197,.14),transparent 60%),rgba(5,10,16,.86);
+    background:radial-gradient(1200px 700px at 50% -10%,rgba(63,169,245,.14),transparent 60%),rgba(5,10,16,.86);
     backdrop-filter:blur(7px);-webkit-backdrop-filter:blur(7px);overflow:auto;z-index:20}
   .card{width:min(880px,100%);padding:22px;display:grid;gap:16px}
   .card h1{margin:0;font-size:clamp(24px,4.4vw,38px);letter-spacing:-.5px}
   .card h1 em{font-style:normal;color:var(--acc)}
   .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
-  @media (max-width:760px){.grid2{grid-template-columns:1fr}#rank{width:180px}#ratio{display:none}#minimap{width:150px;height:110px}}
+  @media (max-width:1400px){
+    /* empilha o painel de ratio acima do minimapa para nao colidir com a barra central */
+    #ratio{right:10px;bottom:176px;width:176px}
+    #minimap{width:180px;height:132px}
+    #buildbar{max-width:calc(100vw - 760px)}
+  }
+  @media (max-width:1150px){
+    #logwrap{width:min(300px,32vw)}
+    #rank{width:200px}
+    #minimap{width:160px;height:117px}
+    #ratio{bottom:156px}
+    #buildbar{max-width:calc(100vw - 640px)}
+  }
+  @media (max-width:950px){
+    #logwrap{width:min(250px,30vw)}
+    #chatlog{max-height:10vh}
+    #minimap{width:132px;height:97px}
+    #ratio{bottom:136px;width:150px}
+    #rank{max-height:38vh}
+    #buildbar{gap:6px;padding:7px;max-width:calc(100vw - 520px)}
+    .bbtn{min-width:70px;padding:6px 8px}
+  }
+  @media (max-width:760px){.grid2{grid-template-columns:1fr}#rank{width:180px}#ratio{display:none}#minimap{width:150px;height:110px}
+    #logwrap{width:200px}#buildbar{max-width:calc(100vw - 440px)}}
   .subcard{padding:14px;display:grid;gap:10px;align-content:start}
   .subcard h2{margin:0;font-size:13px;text-transform:uppercase;letter-spacing:1px;color:var(--mut)}
   #roomlist{display:grid;gap:7px;max-height:230px;overflow:auto}
@@ -102,7 +125,7 @@
   .room b{font-size:13px}
   #plist{display:grid;gap:5px;max-height:230px;overflow:auto}
   .pl{display:flex;align-items:center;gap:8px;padding:6px 9px;border-radius:9px;background:rgba(255,255,255,.045)}
-  .badge{font-size:10px;padding:2px 6px;border-radius:999px;background:rgba(79,209,197,.2);border:1px solid rgba(79,209,197,.4)}
+  .badge{font-size:10px;padding:2px 6px;border-radius:999px;background:rgba(63,169,245,.2);border:1px solid rgba(63,169,245,.4)}
   .badge.host{background:rgba(255,180,84,.2);border-color:rgba(255,180,84,.45)}
   .badge.bot{background:rgba(255,255,255,.08);border-color:var(--line)}
   #count{font-size:34px;font-weight:800;text-align:center;font-variant-numeric:tabular-nums}
@@ -226,8 +249,8 @@
           <b>Controles</b><br />
           <span class="kbd">WASD</span>/<span class="kbd">setas</span> mover câmera · <span class="kbd">Q</span>/<span class="kbd">E</span> ou roda do mouse = zoom<br />
           <span class="kbd">C</span> centralizar no seu império · <span class="kbd">Espaço</span> mostrar/ocultar números<br />
-          <b>Clique num tile vazio</b> = ordem de expansão: suas tropas fluem para lá e se espalham sozinhas até encostarem em outro jogador (sem atacar).<br />
-          <b>Clique num tile inimigo na sua fronteira</b> = ataque direto · clique num tile seu para selecionar e atacar/transferir para onde quiser.<br />
+          <b>Clique num tile vazio</b> = ordem de expansão: suas tropas avançam naquela direção ocupando todo espaço livre enquanto houver soldados (param em fronteira inimiga, sem atacar).<br />
+          <b>Clique num tile inimigo</b> = ordem de invasão: <b>todo o seu exército</b> é bombeado para a frente e ocupa o território dele (do clique para fora) enquanto houver soldados; sem tropas, o ataque cessa. Arrastar entre tiles seus = ataque/transferência manual.<br />
           O número de tropas aparece <b>centralizado por região</b>, crescendo em tempo real.<br />
           <span class="kbd">3</span>–<span class="kbd">6</span> selecionam construção, <span class="kbd">N</span> modo míssil, <span class="kbd">Esc</span> cancela.
         </div>
@@ -237,7 +260,7 @@
           • Portos precisam de costa e dão ouro constante.<br />
           • Postos defensivos multiplicam a defesa da fronteira.<br />
           • Concentre vários tiles num único alvo para romper a linha.<br />
-          • <span class="kbd">Esc</span> cancela a ordem de expansão e a seleção.<br />
+          • <span class="kbd">Esc</span> cancela as ordens de expansão/invasão e a seleção.<br />
           • Na <b>morte súbita</b> as defesas caem: é a hora de virar o jogo.
         </div>
       </div>

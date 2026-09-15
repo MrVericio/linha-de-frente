@@ -56,6 +56,11 @@ export class Game {
   private rnd: () => number = Math.random;
   private botTimers: number[] = [];
   private expandTimers: number[] = [];
+  private invadeTimers: number[] = [];
+  private expandDir = new Map<number, { x: number; y: number }>();
+  private invadeFoe = new Map<number, number>();
+  private expandIdle = new Map<number, number>();
+  private invadeIdle = new Map<number, number>();
   private sdAnnounced = false;
   private distScratch: Int32Array = new Int32Array(0);
   private queueScratch: Int32Array = new Int32Array(0);
@@ -93,6 +98,7 @@ export class Game {
       silos: 0,
       nukeCd: 0,
       expandTarget: -1,
+      invadeTarget: -1,
       removed: false
     };
     if (free >= 0) this.players[id] = p;
@@ -170,6 +176,7 @@ export class Game {
       p.alive = true;
       p.tiles = 0;
       p.troops = 0;
+      p.invadeTarget = -1;
       p.buildings = 0;
       p.nukeCd = 0;
       p.expandTarget = -1;
@@ -258,6 +265,9 @@ export class Game {
     else if (b === B.PORT) cap = PORT_MAX_TROOPS;
     else if (b === B.SILO) cap = SILO_MAX_TROOPS;
     else cap = this.terrain[i] === T.MOUNTAIN ? MOUNTAIN_MAX_TROOPS : TILE_MAX_TROOPS;
+    // dinamica OpenFront: bots tem teto de tropas /3 (humano sempre outscale)
+    const ow = this.owner[i];
+    if (ow >= 0 && this.players[ow] && this.players[ow].bot) cap = cap / 3;
     // na morte subita os exercitos encolhem progressivamente:
     // ninguem consegue segurar o mapa inteiro e a partida sempre termina
     if (this.time < SUDDEN_DEATH_AT) return cap;
@@ -366,6 +376,14 @@ export class Game {
 
     // crescimento das tropas + ouro
     const players = this.players;
+    // rubber-band: quem tem menos territorio cresce mais rapido por tile (e o
+    // lider um pouco mais devagar) — mantem a partida viva e reduz snowball
+    let ownedTotal = 0;
+    let activeN = 0;
+    for (const p of players) {
+      if (p.alive && !p.removed && !p.spectator) { ownedTotal += p.tiles; activeN++; }
+    }
+    const avgTiles = activeN > 0 ? ownedTotal / activeN : 1;
     for (let i = 0; i < this.n; i++) {
       const o = this.owner[i];
       if (o < 0) continue;
@@ -376,8 +394,26 @@ export class Game {
         // excedente evapora (morte subita)
         this.troops[i] = Math.max(cap, cur - cur * SUDDEN_DEATH_DECAY * 4 * dt);
       } else if (cur < cap) {
-        const g = (cur * GROWTH_RATE + FLAT_GROWTH) * dt;
+        const r = avgTiles > 0 ? this.players[o].tiles / avgTiles : 1;
+        const mult = Math.max(0.8, Math.min(1.5, 1.5 - 0.5 * r));
+        const botMul = this.players[o].bot ? 0.5 : 1; // OpenFront: bots crescem x0.5
+        const g = (cur * GROWTH_RATE + FLAT_GROWTH) * mult * botMul * dt;
         this.troops[i] = Math.min(cap, cur + g);
+      } else {
+        // tile cheio: transborda devagar para o vizinho proprio com mais folga
+        // (exercito "flui" para a frente em vez de ficar congelado no teto)
+        let best = -1;
+        let bestRoom = 8;
+        for (const t of this.neighbors(i)) {
+          if (this.owner[t] !== o || this.terrain[t] === T.WATER) continue;
+          const room = this.maxTroops(t) - this.troops[t];
+          if (room > bestRoom) { bestRoom = room; best = t; }
+        }
+        if (best >= 0) {
+          const mv = Math.min(48 * dt, bestRoom);
+          this.troops[i] -= mv;
+          this.troops[best] += mv;
+        }
       }
     }
     for (const p of players) {
@@ -391,13 +427,22 @@ export class Game {
       p.gold += income * dt;
     }
 
-    // expansao automatica dos jogadores
+    // expansao automatica + invasao continua dos jogadores
     for (const p of players) {
-      if (!p.alive || p.removed || p.spectator || p.expandTarget < 0) continue;
-      this.expandTimers[p.id] = (this.expandTimers[p.id] ?? 0) - dt;
-      if (this.expandTimers[p.id] <= 0) {
-        this.expandTimers[p.id] = EXPAND_STEP_INTERVAL;
-        this.expandStep(p);
+      if (!p.alive || p.removed || p.spectator) continue;
+      if (p.expandTarget >= 0) {
+        this.expandTimers[p.id] = (this.expandTimers[p.id] ?? 0) - dt;
+        if (this.expandTimers[p.id] <= 0) {
+          this.expandTimers[p.id] = EXPAND_STEP_INTERVAL;
+          this.expandStep(p);
+        }
+      }
+      if (p.invadeTarget >= 0) {
+        this.invadeTimers[p.id] = (this.invadeTimers[p.id] ?? 0) - dt;
+        if (this.invadeTimers[p.id] <= 0) {
+          this.invadeTimers[p.id] = EXPAND_STEP_INTERVAL;
+          this.invadeStep(p);
+        }
       }
     }
 
@@ -513,11 +558,186 @@ export class Game {
     if (!p || !p.alive || p.spectator || p.removed) return false;
     if (tile === -1) {
       p.expandTarget = -1;
+      this.expandDir.delete(pid);
       return true;
     }
     if (!this.valid(tile) || this.terrain[tile] === T.WATER) return false;
     p.expandTarget = tile;
+    // guarda a direcao da ordem: ao chegar no alvo, a expansao segue em frente
+    let cx = 0, cy = 0, n = 0;
+    for (let i = 0; i < this.n; i++) {
+      if (this.owner[i] === pid) { cx += i % this.w; cy += (i / this.w) | 0; n++; }
+    }
+    if (n > 0) {
+      cx /= n; cy /= n;
+      const dx = (tile % this.w) - cx;
+      const dy = ((tile / this.w) | 0) - cy;
+      const len = Math.hypot(dx, dy) || 1;
+      this.expandDir.set(pid, { x: dx / len, y: dy / len });
+    } else {
+      this.expandDir.set(pid, { x: 1, y: 0 });
+    }
+    this.expandIdle.set(pid, 0);
     return true;
+  }
+
+  /** Proximo alvo neutro "a frente" na direcao da ordem de expansao. */
+  private farNeutralAlong(pid: number, from: number): number {
+    const dir = this.expandDir.get(pid);
+    if (!dir) return -1;
+    let cx = 0, cy = 0, n = 0;
+    for (let i = 0; i < this.n; i++) {
+      if (this.owner[i] === pid) { cx += i % this.w; cy += (i / this.w) | 0; n++; }
+    }
+    if (!n) return -1;
+    cx /= n; cy /= n;
+    const fx = from % this.w;
+    const fy = (from / this.w) | 0;
+    const base = (fx - cx) * dir.x + (fy - cy) * dir.y;
+    let best = -1;
+    let bestProj = base + 2; // só neutros claramente à frente do alvo atual
+    for (let i = 0; i < this.n; i++) {
+      if (this.owner[i] !== -1 || this.terrain[i] === T.WATER) continue;
+      const px = i % this.w;
+      const py = (i / this.w) | 0;
+      const proj = (px - cx) * dir.x + (py - cy) * dir.y;
+      if (proj > bestProj) { bestProj = proj; best = i; }
+    }
+    return best;
+  }
+
+  /** Ordem de invasao continua: ocupa territorio do inimigo clicado enquanto houver tropa. */
+  setInvade(pid: number, tile: number): boolean {
+    if (this.state !== 'playing') return false;
+    const p = this.players[pid];
+    if (!p || !p.alive || p.spectator || p.removed) return false;
+    if (tile === -1) {
+      p.invadeTarget = -1;
+      this.invadeFoe.delete(pid);
+      return true;
+    }
+    if (!this.valid(tile) || this.terrain[tile] === T.WATER) return false;
+    const o = this.owner[tile];
+    if (o < 0 || o === pid) return false;
+    p.invadeTarget = tile;
+    this.invadeFoe.set(pid, o);
+    this.invadeIdle.set(pid, 0);
+    return true;
+  }
+
+  /** Um passo da invasao: ataca a partir da fronteira, priorizando perto do clique. */
+  private invadeStep(p: PlayerSnapshot): void {
+    const t = p.invadeTarget;
+    const foe = this.invadeFoe.get(p.id);
+    if (t < 0 || foe === undefined || !this.valid(t)) {
+      p.invadeTarget = -1;
+      this.invadeFoe.delete(p.id);
+      return;
+    }
+    const fp = this.players[foe];
+    if (!fp || !fp.alive || fp.tiles <= 0 || this.owner[t] === p.id) {
+      p.invadeTarget = -1;
+      this.invadeFoe.delete(p.id);
+      return;
+    }
+    // BFS a partir do clique: ocupar "do ponto clicado para fora"
+    if (this.distScratch.length !== this.n) {
+      this.distScratch = new Int32Array(this.n);
+      this.queueScratch = new Int32Array(this.n);
+    }
+    const dist = this.distScratch;
+    dist.fill(-1);
+    const q = this.queueScratch;
+    let head = 0;
+    let tail = 0;
+    dist[t] = 0;
+    q[tail++] = t;
+    while (head < tail) {
+      const cur = q[head++];
+      const d = dist[cur] + 1;
+      for (const nb of this.neighbors(cur)) {
+        if (dist[nb] !== -1 || this.terrain[nb] === T.WATER) continue;
+        dist[nb] = d;
+        q[tail++] = nb;
+      }
+    }
+    // ---- compromisso total: bombeia o exercito inteiro p/ a frente de invasao ----
+    const borderSet = new Set<number>();
+    for (let i = 0; i < this.n; i++) {
+      if (this.owner[i] !== p.id) continue;
+      for (const nb of this.neighbors(i)) {
+        if (this.owner[nb] === foe) { borderSet.add(i); break; }
+      }
+    }
+    if (borderSet.size) {
+      const flow = this.flowToward(p.id, borderSet);
+      let moves = 0;
+      for (let i = 0; i < this.n && moves < 24; i++) {
+        if (this.owner[i] !== p.id || borderSet.has(i)) continue;
+        if (this.troops[i] < this.maxTroops(i) * 0.5) continue;
+        const next = flow[i];
+        if (next < 0 || this.owner[next] !== p.id) continue;
+        if (this.maxTroops(next) - this.troops[next] < 80) continue;
+        if (this.attackChain(p.id, [i, next], 1)) moves++;
+      }
+    }
+    // ---- ataca com tudo: todos os pares vencedores da fronteira ----
+    type Cand = { from: number; to: number; d: number; score: number };
+    const cands: Cand[] = [];
+    for (const i of borderSet) {
+      for (const nb of this.neighbors(i)) {
+        if (this.owner[nb] !== foe) continue;
+        const atk = this.troops[i];
+        const def = this.troops[nb] * this.defenseMult(nb, p.id);
+        if (atk < def * 1.1 + 8) continue; // sem soldados p/ vencer: nao ataca
+        cands.push({ from: i, to: nb, d: dist[nb] >= 0 ? dist[nb] : 100000, score: atk / (def + 48) });
+      }
+    }
+    if (!cands.length) {
+      const idle = (this.invadeIdle.get(p.id) ?? 0) + 1;
+      this.invadeIdle.set(p.id, idle);
+      if (idle >= 10) {
+        // ofensiva esgotada: o ataque cessa
+        p.invadeTarget = -1;
+        this.invadeFoe.delete(p.id);
+        this.invadeIdle.set(p.id, 0);
+      }
+      return;
+    }
+    this.invadeIdle.set(p.id, 0);
+    cands.sort((a, b) => a.d - b.d || b.score - a.score);
+    let hits = 0;
+    const usedFrom = new Set<number>();
+    for (const c of cands) {
+      if (hits >= 12) break;
+      if (usedFrom.has(c.from) || this.owner[c.from] !== p.id || this.owner[c.to] !== foe) continue;
+      if (this.attackChain(p.id, [c.from, c.to], 1)) {
+        hits++;
+        usedFrom.add(c.from);
+      }
+    }
+  }
+
+  /** BFS multi-origem: proximo salto de cada tile proprio em direcao ao conjunto alvo. */
+  private flowToward(pid: number, targets: Set<number>): Int32Array {
+    const flow = new Int32Array(this.n).fill(-1);
+    const seen = new Uint8Array(this.n);
+    const queue: number[] = [];
+    for (const b of targets) {
+      seen[b] = 1;
+      queue.push(b);
+    }
+    let head = 0;
+    while (head < queue.length) {
+      const cur = queue[head++];
+      for (const t of this.neighbors(cur)) {
+        if (seen[t] || this.owner[t] !== pid) continue;
+        seen[t] = 1;
+        flow[t] = cur;
+        queue.push(t);
+      }
+    }
+    return flow;
   }
 
   /** Um passo da expansao automatica de um jogador. */
@@ -532,8 +752,14 @@ export class Game {
       return;
     }
     if (this.owner[t] === p.id) {
-      p.expandTarget = -1; // chegou ao destino
-      return;
+      // chegou ao destino: segue ocupando tudo à frente na mesma direção
+      const nt = this.farNeutralAlong(p.id, t);
+      if (nt < 0) {
+        p.expandTarget = -1; // não há mais espaço livre nessa direção
+        this.expandDir.delete(p.id);
+        return;
+      }
+      p.expandTarget = nt;
     }
 
     // campo de distancia (BFS a partir do alvo, so por terra)
@@ -614,6 +840,18 @@ export class Game {
         continue;
       }
       if (this.resolveAttack(p.id, c.from, c.to, EXPAND_RATIO)) claims++;
+    }
+    // sem tropas para continuar: a ordem cessa (em vez de ficar pendurada)
+    if (claims === 0 && pulls === 0) {
+      const idle = (this.expandIdle.get(p.id) ?? 0) + 1;
+      this.expandIdle.set(p.id, idle);
+      if (idle >= 10) {
+        p.expandTarget = -1;
+        this.expandDir.delete(p.id);
+        this.expandIdle.set(p.id, 0);
+      }
+    } else {
+      this.expandIdle.set(p.id, 0);
     }
   }
 

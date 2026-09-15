@@ -37,26 +37,29 @@ export const TICK_HZ = 20; // ticks de simulacao por segundo (servidor)
 export const BROADCAST_HZ = 10; // pacotes de estado por segundo
 export const WIN_CONTROL = 0.72; // % do territorio terrestre para vencer
 
-export const TILE_MAX_TROOPS = 130;
-export const MOUNTAIN_MAX_TROOPS = 65;
-export const CITY_MAX_TROOPS = 1500;
-export const OUTPOST_MAX_TROOPS = 320;
-export const PORT_MAX_TROOPS = 220;
-export const SILO_MAX_TROOPS = 220;
+export const TILE_MAX_TROOPS = 1000;
+export const MOUNTAIN_MAX_TROOPS = 500;
+export const CITY_MAX_TROOPS = 12000;
+export const OUTPOST_MAX_TROOPS = 2500;
+export const PORT_MAX_TROOPS = 1800;
+export const SILO_MAX_TROOPS = 1800;
 
 export const GROWTH_RATE = 0.06; // crescimento proporcional por segundo
-export const FLAT_GROWTH = 1.1; // crescimento linear por segundo (recupera tile quase vazio)
-export const MIN_ATTACK_TROOPS = 2;
-export const TRANSFER_RESERVE = 4; // tropas que ficam no tile ao transferir
+export const FLAT_GROWTH = 12; // crescimento linear por segundo (recupera tile quase vazio)
+export const MIN_ATTACK_TROOPS = 16;
+export const TRANSFER_RESERVE = 32; // tropas que ficam no tile ao transferir
+
+//inspirado na dinamica do OpenFront/FrontWars (cap por tile alto, bots com
+// teto /3 e crescimento x0.5 como no original) — numeros seguem crescendo.
 
 // ---------------- Expansao automatica ----------------
 // Clique num tile vazio = ordem de expansao: as tropas fluem e se espalham
 // pelo territorio neutro em direcao ao alvo, parando ao encostar em outro
 // jogador (sem atacar). Clique em tile inimigo na fronteira = ataque.
 export const EXPAND_STEP_INTERVAL = 0.22; // segundos entre passos de expansao
-export const EXPAND_MAX_CLAIMS_PER_STEP = 2; // tiles neutros conquistados por passo
+export const EXPAND_MAX_CLAIMS_PER_STEP = 4; // tiles neutros conquistados por passo
 export const EXPAND_RATIO = 0.9; // fracao das tropas usadas ao conquistar
-export const EXPAND_RESERVE = 6; // tropas minimas que ficam no tile de origem
+export const EXPAND_RESERVE = 48; // tropas minimas que ficam no tile de origem
 
 export const DEF_OUTPOST = 1.4; // multiplicador defensivo
 export const DEF_MOUNTAIN = 1.3;
@@ -64,10 +67,10 @@ export const DEF_CITY = 1.25;
 
 // ---------------- Economia ----------------
 export const GOLD_START = 320;
-export const GOLD_PORT_PER_SEC = 4.0; // por porto
-export const GOLD_CITY_PER_SEC = 1.6; // por cidade
-export const GOLD_TILE_PER_SEC = 0.008; // por tile
-export const GOLD_BASE_PER_SEC = 0.5;
+export const GOLD_PORT_PER_SEC = 8.0; // por porto
+export const GOLD_CITY_PER_SEC = 3.2; // por cidade
+export const GOLD_TILE_PER_SEC = 0.04; // por tile
+export const GOLD_BASE_PER_SEC = 1.0;
 
 export const COSTS: Record<string, number> = {
   city: 400,
@@ -127,6 +130,7 @@ export interface PlayerSnapshot {
   nukeCd: number;
   /** alvo da ordem de expansao automatica (-1 = nenhuma) */
   expandTarget: number;
+  invadeTarget: number;
   /** true para quem esta assistindo (entrou com a partida em andamento) */
   spectator?: boolean;
   /** slot liberado (jogador saiu do lobby) — id nunca e reutilizado durante a partida */

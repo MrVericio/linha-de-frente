@@ -2,3 +2,4 @@ node_modules/
 dist/
 screens/99-erro.png
 *.log
+.deploy/

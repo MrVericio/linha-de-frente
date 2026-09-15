@@ -89,7 +89,7 @@ export function botThink(g: Game, p: PlayerSnapshot): void {
 
   const byTarget = new Map<number, Opportunity[]>();
   for (const f of front) {
-    if (f.atk * ratio < 4) continue;
+    if (f.atk * ratio < 32) continue;
     const list = byTarget.get(f.to);
     if (list) list.push(f);
     else byTarget.set(f.to, [f]);
@@ -101,8 +101,8 @@ export function botThink(g: Game, p: PlayerSnapshot): void {
     const def = g.troops[to] * g.defenseMult(to, foe);
     let totalAtk = 0;
     for (const o of list) totalAtk += o.atk * ratio;
-    let score = totalAtk / (def + 6);
-    if (foe < 0) score *= 1.45;
+    let score = totalAtk / (def + 48);
+    if (foe < 0) score *= 1.2;
     if (foe >= 0 && g.bld[to] !== B.NONE) score *= 1.3;
     if (inWave && !sd) {
       if (foe !== mem!.waveFoe) continue; // foco total no alvo da onda
@@ -118,21 +118,31 @@ export function botThink(g: Game, p: PlayerSnapshot): void {
   const usedFrom = new Set<number>();
   const captured: number[] = [];
   let assaults = 0;
+  // teto de conquista de neutro por "pensada": reduz snowball dos bots e
+  // deixa o ritmo de expansao mais proximo do que um humano clicando
+  const neutralLimit = diff >= 2 ? 3 : diff === 1 ? 2 : 1;
+  let neutralCaps = 0;
   for (const s of scored) {
     if (assaults >= maxAssaults) break;
+    const targetNeutral = g.owner[s.to] < 0;
+    if (targetNeutral && neutralCaps >= neutralLimit) continue;
     const sources = s.list
-      .filter((o) => !usedFrom.has(o.from) && g.troops[o.from] >= 8 && g.owner[o.from] === p.id)
+      .filter((o) => !usedFrom.has(o.from) && g.troops[o.from] >= 64 && g.owner[o.from] === p.id)
       .sort((a, b) => b.atk - a.atk);
     if (!sources.length) continue;
     let hit = false;
     for (const src of sources) {
       const path = extendPath(g, p.id, src.from, s.to, blitzDepth, ratio);
       const wasHostile = g.owner[s.to] !== p.id;
+      const wasNeutral = g.owner[s.to] < 0;
       if (g.attackChain(p.id, path, ratio)) {
         usedFrom.add(src.from);
         hit = true;
         if (g.owner[s.to] === p.id) {
-          if (wasHostile) captured.push(s.to);
+          if (wasHostile) {
+            captured.push(s.to);
+            if (wasNeutral) neutralCaps++;
+          }
           break; // alvo caiu, para de gastar tropa
         }
       }
@@ -143,7 +153,7 @@ export function botThink(g: Game, p: PlayerSnapshot): void {
   // explorar a brecha: segue empurrando a partir do tile recem-capturado
   if (captured.length && diff >= 1) {
     const depth = g.suddenDeath ? 8 : inWave ? 6 : 3;
-    for (const c of captured) pursue(g, p.id, c, ratio, depth);
+    for (const c of captured) pursue(g, p.id, c, ratio, depth, inWave || sd);
   }
 
   // ---------------- concentrar exercito na fronteira ----------------
@@ -157,7 +167,7 @@ export function botThink(g: Game, p: PlayerSnapshot): void {
       if (g.troops[i] < cap * (inWave ? 0.55 : 0.75)) continue;
       const next = flow[i];
       if (next < 0 || g.owner[next] !== p.id) continue;
-      if (g.maxTroops(next) - g.troops[next] < 10) continue;
+      if (g.maxTroops(next) - g.troops[next] < 80) continue;
       if (g.attackChain(p.id, [i, next], 1)) done++;
     }
   }
@@ -177,7 +187,7 @@ export function botThink(g: Game, p: PlayerSnapshot): void {
         if (g.terrain[t] === T.WATER || g.owner[t] === p.id) continue;
         threat += g.troops[t];
       }
-      if (threat < g.troops[i] * 1.1 + 25) continue;
+      if (threat < g.troops[i] * 1.1 + 200) continue;
       let src = -1;
       let srcTroops = 0;
       for (const t of g.neighbors(i)) {
@@ -188,7 +198,7 @@ export function botThink(g: Game, p: PlayerSnapshot): void {
           src = t;
         }
       }
-      if (src >= 0 && srcTroops > 35 && g.attackChain(p.id, [src, i], 1)) moved++;
+      if (src >= 0 && srcTroops > 280 && g.attackChain(p.id, [src, i], 1)) moved++;
     }
     // retaguarda cheia -> frente
     for (const i of own) {
@@ -201,7 +211,7 @@ export function botThink(g: Game, p: PlayerSnapshot): void {
       for (const t of g.neighbors(i)) {
         if (g.terrain[t] === T.WATER || g.owner[t] !== p.id) continue;
         const room = g.maxTroops(t) - g.troops[t];
-        if (room < 15) continue;
+        if (room < 120) continue;
         const score = (borderSet.has(t) ? 3 : 0) + room / 100;
         if (score > bestScore) {
           bestScore = score;
@@ -220,7 +230,7 @@ export function botThink(g: Game, p: PlayerSnapshot): void {
 
   if (p.cities < wantCities && gold >= COSTS.city + RESERVE && buildable.length) {
     const spot = pickInteriorSpot(g, buildable, p.id);
-    if (spot >= 0 && g.troops[spot] >= 40 && g.build(p.id, spot, B.CITY)) return;
+    if (spot >= 0 && g.troops[spot] >= 320 && g.build(p.id, spot, B.CITY)) return;
   }
 
   if (p.ports < wantPorts && gold >= COSTS.port + RESERVE && coastBuildable.length) {
@@ -230,7 +240,7 @@ export function botThink(g: Game, p: PlayerSnapshot): void {
 
   if (p.outposts < wantOutposts && gold >= COSTS.outpost + RESERVE * 0.4 && borderTiles.length) {
     let best = -1;
-    let bestPressure = 30;
+    let bestPressure = 240;
     for (const i of borderTiles) {
       if (g.bld[i] !== B.NONE) continue;
       let pressure = 0;
@@ -286,14 +296,15 @@ function buildFlow(g: Game, pid: number, own: number[], borderTiles: number[]): 
 }
 
 /** Persegue o inimigo a partir de um tile recem-capturado enquanto estiver vencendo. */
-function pursue(g: Game, pid: number, start: number, ratio: number, maxSteps: number): void {
+function pursue(g: Game, pid: number, start: number, ratio: number, maxSteps: number, neutrals: boolean): void {
   let cur = start;
   for (let s = 0; s < maxSteps; s++) {
-    if (g.owner[cur] !== pid || g.troops[cur] < 8) break;
+    if (g.owner[cur] !== pid || g.troops[cur] < 64) break;
     let best = -1;
     let bestDef = Infinity;
     for (const t of g.neighbors(cur)) {
       if (g.terrain[t] === T.WATER || g.owner[t] === pid) continue;
+      if (g.owner[t] < 0 && !neutrals) continue; // fora de onda: nao arrasta neutro
       const def = g.troops[t] * g.defenseMult(t, g.owner[t]);
       if (def < bestDef) {
         bestDef = def;
@@ -321,7 +332,7 @@ function pickWaveTarget(g: Game, p: PlayerSnapshot, front: Opportunity[], leader
   let bestScore = 0;
   for (const [foe, def] of foeTroops) {
     const mine = myTroops.get(foe) || 0;
-    let score = mine / (def + 20);
+    let score = mine / (def + 160);
     const fp = g.players[foe];
     if (fp && !fp.alive) continue;
     if (foe === leader) score *= 0.8;
@@ -341,7 +352,7 @@ function extendPath(g: Game, pid: number, from: number, to: number, depth: numbe
   let arriving = g.troops[from] * ratio - g.troops[to] * g.defenseMult(to, g.owner[to]);
   const seen = new Set<number>([from, to]);
   for (let step = 1; step < depth; step++) {
-    if (arriving < 10) break;
+    if (arriving < 80) break;
     let best = -1;
     let bestTroops = Infinity;
     for (const t of g.neighbors(cur)) {
@@ -428,7 +439,7 @@ function pickNukeTarget(
         const j = ny * w + nx;
         const o = g.owner[j];
         if (o < 0 || o === pid) continue;
-        sc += g.troops[j] + (g.bld[j] === B.CITY ? 400 : g.bld[j] !== B.NONE ? 180 : 0);
+        sc += g.troops[j] + (g.bld[j] === B.CITY ? 3200 : g.bld[j] !== B.NONE ? 1440 : 0);
       }
     }
     if (waveFoe >= 0 && g.owner[i] === waveFoe) sc *= 1.7;
@@ -437,7 +448,7 @@ function pickNukeTarget(
       bestTile = i;
     }
   }
-  if (bestTile < 0 || bestScore < 220) return null;
+  if (bestTile < 0 || bestScore < 1760) return null;
 
   // escolhe o silo com alcance; se o alvo estiver longe, tenta o melhor alvo ao alcance
   for (const s of siloTiles) {
